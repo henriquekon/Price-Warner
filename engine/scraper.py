@@ -159,8 +159,6 @@ class AddonScraper:
         """
         print(f"\n[Scraper] Searching: {url}")
         resp = self._make_request(url)
-        with open("debug.html", "w", encoding="utf-8") as f:
-            f.write(resp.text)
         soup = BeautifulSoup(resp.text, "html.parser")
 
         result = {

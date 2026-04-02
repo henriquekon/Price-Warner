@@ -1,0 +1,83 @@
+{
+  "_comment": "KaBuM (Brazilian hardware retailer) Add-on - https://www.kabum.com.br",
+  "store": {
+    "id": "kabum",
+    "name": "KaBuM!",
+    "base_url": "https://www.kabum.com.br",
+    "currency": "BRL"
+  },
+
+  "request": {
+    "method": "GET",
+    "headers": {
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      "Accept-Language": "pt-BR,pt;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br"
+    },
+    "timeout": 15,
+    "rate_limit_seconds": 300
+  },
+
+  "price": {
+    "strategies": [
+    {
+        "name": "schema_org_json",
+        "description": "Extracts price from Schema.org JSON-LD",
+        "type": "json_in_script",
+        "selector": "script[type='application/ld+json']",
+        "json_path": "offers.price",
+        "transform": "float"
+    },
+    {
+        "name": "css_selector",
+        "description": "Fallback via seletor CSS direto no HTML",
+        "type": "css",
+        "selector": "h4.text-4xl",
+        "regex": "[\\d.,]+",
+        "transform": "comma_decimal_to_float"
+    }
+    ]
+  },
+
+  "product_name": {
+    "strategies": [
+    {
+        "name": "schema_org_json",
+        "type": "json_in_script",
+        "selector": "script[type='application/ld+json']",
+        "json_path": "name"
+    },
+    {
+        "name": "meta_og_title",
+        "type": "meta",
+        "attribute": "property",
+        "value": "og:title",
+        "extract": "content"
+    }
+    ]
+  },
+
+  "availability": {
+    "strategies": [
+    {
+      "name": "schema_org_availability",
+      "type": "json_in_script",
+      "selector": "script[type='application/ld+json']",
+      "json_path": "offers.availability",
+      "map": {
+        "https://schema.org/InStock": "in_stock",
+        "https://schema.org/OutOfStock": "out_of_stock"
+      }
+    },
+    {
+        "name": "in_stock_text",
+        "description": "Checks if the text 'Em estoque' is present on the page",
+        "type": "css_exists",
+        "selector": "div.text-success-500",
+        "contains_text": "Em estoque",
+        "true_value": "in_stock",
+        "false_value": "out_of_stock"
+    }
+    ]
+  }
+}

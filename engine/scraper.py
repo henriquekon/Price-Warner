@@ -4,7 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
 from fake_useragent import UserAgent
-from data.models import init_db, SessionLocal, Product, PriceHistory
+from data.models import Store, init_db, SessionLocal, Product, PriceHistory
 
 # Value Transformations
 def transform_value(raw, transform: str):
@@ -147,13 +147,23 @@ class AddonScraper:
     def save_to_db(self, scrape_result: dict):
         session = SessionLocal()
         try:
+            store = session.query(Store).filter(Store.id == scrape_result["store"]).first()
+            if not store:
+                store = Store(
+                    id=scrape_result["store"],
+                    name=scrape_result["store_name"]
+                )
+                session.add(store)
+                session.commit()
+                session.refresh(store)
+
             product = session.query(Product).filter(Product.url == scrape_result["url"]).first()
             
             if not product:
                 product = Product(
                     name=scrape_result["product_name"],
                     url=scrape_result["url"],
-                    store_id=scrape_result["store"]
+                    store_id=store.id
                 )
                 session.add(product)
                 session.commit()

@@ -16,19 +16,25 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 class Base(DeclarativeBase):
     pass
 
+class Store(Base):
+    __tablename__ = "stores"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
 class Product(Base):
     __tablename__ = "products"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(String(1024), unique=True)
-    store_id: Mapped[str] = mapped_column(String(50))
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
     custom_interval: Mapped[int] = mapped_column(nullable=True, default=None)
-    target_drop_percentage: Mapped[float] = mapped_column(Float, default=10.0)
+    last_checked: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     
-    history: Mapped[List["PriceHistory"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+    target_drop_percentage: Mapped[float] = mapped_column(Float, default=10.0)
+    history: Mapped[List["PriceHistory"]] = relationship(back_populates="product")
 
     def __repr__(self):
         return f"<Product(name={self.name}, store={self.store_id})>"

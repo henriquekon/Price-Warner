@@ -4,6 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
 from fake_useragent import UserAgent
+from data.models import init_db, SessionLocal, Product, PriceHistory
 
 # Value Transformations
 def transform_value(raw, transform: str):
@@ -137,10 +138,42 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 
 class AddonScraper:
     def __init__(self, addon_path: str):
+        init_db()
         with open(addon_path, "r", encoding="utf-8") as f:
             self.addon = json.load(f)
         self.ua = UserAgent()
         self.client = httpx.Client(http2=True, timeout=15)
+
+    def save_to_db(self, scrape_result: dict):
+        session = SessionLocal()
+        try:
+            product = session.query(Product).filter(Product.url == scrape_result["url"]).first()
+            
+            if not product:
+                product = Product(
+                    name=scrape_result["product_name"],
+                    url=scrape_result["url"],
+                    store_id=scrape_result["store"]
+                )
+                session.add(product)
+                session.commit()
+                session.refresh(product)
+
+            new_history = PriceHistory(
+                product_id=product.id,
+                price=scrape_result["price"],
+                availability=scrape_result["availability"] or "unknown",
+                strategy_used=str(scrape_result["strategies_used"].get("price"))
+            )
+            session.add(new_history)
+            session.commit()
+            print(f"  [DB] Data saved successfully for product ID: {product.id}")
+            
+        except Exception as e:
+            session.rollback()
+            print(f"  [ERROR] Failed to save to database: {e}")
+        finally:
+            session.close()
 
     def _make_request(self, url: str) -> httpx.Response:
         cfg = self.addon.get("request", {})
@@ -209,6 +242,9 @@ if __name__ == "__main__":
 
     scraper = AddonScraper(addon_path)
     data = scraper.scrape(url)
+
+    if data["ok"]:
+        scraper.save_to_db(data)
 
     print("\n──────────────────────────────")
     print("Final result:")

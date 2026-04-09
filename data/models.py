@@ -35,6 +35,7 @@ class Product(Base):
     
     target_drop_percentage: Mapped[float] = mapped_column(Float, default=10.0)
     history: Mapped[List["PriceHistory"]] = relationship(back_populates="product")
+    last_error: Mapped[str] = mapped_column(String(500), nullable=True)
 
     def __repr__(self):
         return f"<Product(name={self.name}, store={self.store_id})>"

@@ -192,7 +192,7 @@ class AddonScraper:
 
         timeout = cfg.get("timeout", 15)
 
-        resp = self.client.get(url)
+        resp = self.client.get(url, follow_redirects=True)
         resp.raise_for_status()
         return resp
 

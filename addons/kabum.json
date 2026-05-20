@@ -39,6 +39,26 @@
     ]
   },
 
+  "search": {
+    "url_template": "https://www.kabum.com.br/busca/{query}",
+    "strategies": [
+      {
+        "name": "next_js_catalog",
+        "type": "json_catalog",
+        "selector": "script#__NEXT_DATA__",
+        "root_json_path": "props.pageProps.data.catalogServer.data",
+        "mapping": {
+          "name_key": "name",
+          "url_key": "code",
+          "url_prefix": "https://www.kabum.com.br/produto/",
+          "price_key": "priceWithDiscount",
+          "image_key": "image",
+          "image_prefix": "https://images.kabum.com.br/produtos/fotos/g/"
+        }
+      }
+    ]
+  },
+
   "product_name": {
     "strategies": [
     {

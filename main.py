@@ -7,7 +7,7 @@ from data.models import init_db
 
 app = FastAPI(title="Price-Warner Server")
 
-app.include_router(api_router, prefix="/api/v1")
+app.include_router(api_router)
 
 @app.on_event("startup")
 async def on_startup():

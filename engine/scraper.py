@@ -8,7 +8,7 @@ from data.models import Store, init_db, SessionLocal, Product, PriceHistory
 
 # Value Transformations
 def transform_value(raw, transform: str):
-    """Converts raw extracted value to a desired format (e.g. float)."""
+    """Converts raw extracted value to a desired format"""
     if transform is None or raw is None:
         return raw
 
@@ -20,7 +20,6 @@ def transform_value(raw, transform: str):
         return float(cleaned)
 
     if transform == "comma_decimal_to_float":
-        # "R$ 1.299,90" → 1299.90
         cleaned = re.sub(r"[^\d,]", "", str(raw))
         cleaned = cleaned.replace(",", ".")
         return float(cleaned)
@@ -31,7 +30,7 @@ def transform_value(raw, transform: str):
 
 # Extractions
 def extract_json_in_script(soup: BeautifulSoup, strategy: dict):
-    """Extracts value from a JSON object embedded in a <script> tag."""
+    """Extracts value from a JSON object embedded in a <script> tag"""
     tag = soup.select_one(strategy["selector"])
     if not tag:
         return None
@@ -43,7 +42,6 @@ def extract_json_in_script(soup: BeautifulSoup, strategy: dict):
     except (json.JSONDecodeError, TypeError):
         return None
 
-    # Navigates through the JSON using the provided path (e.g. "props.pageProps.productPage.product.price")
     keys = strategy["json_path"].split(".")
     current = data
     for key in keys:
@@ -61,7 +59,7 @@ def extract_json_in_script(soup: BeautifulSoup, strategy: dict):
 
 
 def extract_meta(soup: BeautifulSoup, strategy: dict):
-    """Extracts value from a meta tag (e.g. og:price, product:price:amount)."""
+    """Extracts value from a meta tag"""
     tag = soup.find(
         "meta",
         attrs={strategy["attribute"]: strategy["value"]}
@@ -74,7 +72,7 @@ def extract_meta(soup: BeautifulSoup, strategy: dict):
 
 
 def extract_css(soup: BeautifulSoup, strategy: dict):
-    """Extracts value via CSS selector, with optional regex."""
+    """Extracts value via CSS selector, with optional regex"""
     tag = soup.select_one(strategy["selector"])
     if not tag:
         return None
@@ -93,7 +91,6 @@ def extract_css(soup: BeautifulSoup, strategy: dict):
 def extract_css_exists(soup: BeautifulSoup, strategy: dict):
         tag = soup.select_one(strategy["selector"])
         
-        # If "contains_text" is specified, check if the tag's text contains that substring
         contains_text = strategy.get("contains_text")
         if tag and contains_text:
             found = contains_text in tag.get_text()
@@ -116,19 +113,19 @@ STRATEGY_MAP = {
 
 def run_strategies(soup: BeautifulSoup, strategies: list):
     """
-    Tries each strategy in order and returns the first successful result along with the strategy name.
+    Tries each strategy in order and returns the first successful result
     """
     for strategy in strategies:
         stype = strategy.get("type")
         fn = STRATEGY_MAP.get(stype)
         if not fn:
-            print(f"  [WARN] Unknown strategy type: '{stype}', skipping.")
+            print(f"[WARN] Unknown strategy type: '{stype}', skipping.")
             continue
 
         try:
             result = fn(soup, strategy)
         except Exception as e:
-            print(f"  [WARN] Strategy '{strategy['name']}' failed with error: {e}")
+            print(f"[WARN] Strategy '{strategy['name']}' failed with error: {e}")
             result = None
 
         if result is not None:
@@ -179,11 +176,11 @@ class AddonScraper:
             )
             session.add(new_history)
             session.commit()
-            print(f"  [DB] Data saved successfully for product ID: {product.id}")
+            print(f"[DB] Data saved successfully for product ID: {product.id}")
             
         except Exception as e:
             session.rollback()
-            print(f"  [ERROR] Failed to save to database: {e}")
+            print(f"[ERROR] Failed to save to database: {e}")
         finally:
             session.close()
 
@@ -244,3 +241,123 @@ class AddonScraper:
 
         result["ok"] = result["price"] is not None
         return result
+    
+    def search_external(self, query: str) -> list:
+        """
+        Searches the store externally by parsing HTML elements or embedded 
+        JSON structures dynamically defined in the store's addon configuration.
+        """
+        search_cfg = self.addon.get("search")
+        if not search_cfg:
+            print(f"[WARN] Store '{self.addon['store']['id']}' does not support external search.")
+            return []
+
+        import urllib.parse
+        
+        query_encoded = urllib.parse.quote(query)
+        url = search_cfg["url_template"].format(query=query_encoded)
+        
+        try:
+            resp = self._make_request(url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            products_found = []
+
+            for strategy in search_cfg["strategies"]:
+                stype = strategy.get("type")
+                
+                if stype == "json_catalog":
+                    tag = soup.select_one(strategy["selector"])
+                    if not tag:
+                        continue
+                        
+                    try:
+                        catalog_data = json.loads(tag.string)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                        
+                    keys = strategy["root_json_path"].split(".")
+                    for key in keys:
+                        if isinstance(catalog_data, dict):
+                            catalog_data = catalog_data.get(key, {})
+                            
+                    if not isinstance(catalog_data, list):
+                        continue
+                        
+                    mapping = strategy["mapping"]
+                    
+                    for item in catalog_data[:12]:
+                        if not isinstance(item, dict):
+                            continue
+                            
+                        raw_name = item.get(mapping["name_key"], "Sem nome")
+                        raw_url_node = item.get(mapping["url_key"], "")
+                        raw_price = item.get(mapping["price_key"])
+                        raw_image = item.get(mapping["image_key"], "")
+                        
+                        full_url = f"{mapping.get('url_prefix', '')}{raw_url_node}" if raw_url_node else ""
+                        full_image = f"{mapping.get('image_prefix', '')}{raw_image}" if raw_image else None
+                        
+                        try:
+                            price_value = float(raw_price) if raw_price is not None else None
+                        except ValueError:
+                            price_value = None
+
+                        products_found.append({
+                            "name": raw_name,
+                            "url": full_url,
+                            "price": price_value,
+                            "image_url": full_image,
+                            "store_id": self.addon["store"]["id"]
+                        })
+                        
+                    if products_found:
+                        return products_found
+
+                elif stype == "html_cards":
+                    cards = soup.select(strategy["card_selector"])
+                    if not cards:
+                        continue
+                        
+                    mapping = strategy["mapping"]
+                    for card in cards[:12]:
+                        aria_info = card.get(mapping["name_source"], "")
+                        if not aria_info:
+                            continue
+                            
+                        raw_url = card.get(mapping["url_source"], "")
+                        prefix = mapping.get("url_prefix", "")
+                        full_url = raw_url if raw_url.startswith("http") else f"{prefix}{raw_url}"
+                        
+                        img_tag = card.select_one(mapping["image_selector"])
+                        image_url = img_tag.get(mapping["image_source"]) if img_tag else None
+                        
+                        price_match = re.search(mapping["price_regex"], aria_info)
+                        price_value = None
+                        name_value = aria_info
+                        
+                        if price_match:
+                            raw_price = price_match.group(1)
+                            name_value = aria_info.split(price_match.group(0))[0].strip().rstrip(",")
+                            try:
+                                if "," in raw_price:
+                                    raw_price = raw_price.replace(".", "").replace(",", ".")
+                                price_value = float(raw_price)
+                            except ValueError:
+                                price_value = None
+
+                        products_found.append({
+                            "name": name_value,
+                            "url": full_url,
+                            "price": price_value,
+                            "image_url": image_url,
+                            "store_id": self.addon["store"]["id"]
+                        })
+                        
+                    if products_found:
+                        return products_found
+                        
+            return products_found
+
+        except Exception as e:
+            print(f"[ERROR] Failed to perform robust external search: {e}")
+            return []

@@ -79,5 +79,16 @@
         "false_value": "out_of_stock"
     }
     ]
+  },
+
+  "product_image": {
+    "strategies": [
+      {
+        "name": "schema_org_image",
+        "type": "json_in_script",
+        "selector": "script[type='application/ld+json']",
+        "json_path": "image"
+      }
+    ]
   }
 }

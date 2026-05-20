@@ -48,10 +48,9 @@ async def price_scheduler():
             products = db.query(Product).filter(Product.is_active == True).all()
 
             for product in products:
-                interval = product.custom_interval or 30
-                proxima_checa = (product.last_checked or datetime.min) + timedelta(minutes=interval)
+                next_check = (product.last_checked or datetime.min) + timedelta(minutes=product.interval)
 
-                if now >= proxima_checa:
+                if now >= next_check:
                     print(f"[*] Verifying: {product.name}...")
                     scraper = AddonScraper(f"addons/{product.store_id}.json")
                     data = scraper.scrape(product.url)

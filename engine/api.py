@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 from data.models import SessionLocal, Product, Store
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 router = APIRouter()
@@ -11,7 +11,7 @@ class ProductCreate(BaseModel):
     name: str
     url: str
     store_id: str
-    custom_interval: Optional[int] = None
+    interval: Optional[int] = Field(default=30, description="Interval in minutes")
     target_drop_percentage: Optional[float] = 10.0
 
 # Dependency to get DB session
@@ -26,6 +26,12 @@ def get_db():
 def get_all_products(db: Session = Depends(get_db)):
     return db.query(Product).all()
 
+# Search by name
+@router.get("/products/search")
+def search_products(q: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    results = db.query(Product).filter(Product.name.ilike(f"%{q}%")).all()
+    return results
+
 @router.post("/products")
 def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
     # Checks if the store exists before adding the product
@@ -33,7 +39,13 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
     if not store:
         raise HTTPException(status_code=404, detail="Store not found. Please register the store or run the scraper once.")
     
-    db_product = Product(**prod.dict())
+    data = prod.dict()
+    if data.get("interval") is None:
+        data["interval"] = 30
+
+    db_product = Product(**data)
     db.add(db_product)
     db.commit()
+    db.refresh(db_product)
+    
     return {"message": "Product added successfully", "product_id": db_product.id}

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List
-from sqlalchemy import ForeignKey, String, Float, DateTime, Boolean
+from sqlalchemy import ForeignKey, String, Float, DateTime, Boolean, Integer
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,10 +27,11 @@ class Product(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(String(1024), unique=True)
+    image_url: Mapped[str] = mapped_column(String(1024), nullable=True)
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
-    custom_interval: Mapped[int] = mapped_column(nullable=True, default=None)
+    interval: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     last_checked: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     
     target_drop_percentage: Mapped[float] = mapped_column(Float, default=10.0)

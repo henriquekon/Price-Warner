@@ -163,7 +163,9 @@ class AddonScraper:
                 product = Product(
                     name=scrape_result["product_name"],
                     url=scrape_result["url"],
-                    store_id=store.id
+                    image_url=scrape_result.get("image_url"),
+                    store_id=store.id,
+                    interval=30,
                 )
                 session.add(product)
                 session.commit()
@@ -236,26 +238,9 @@ class AddonScraper:
             result["strategies_used"]["availability"] = strat
             print(f"  Availability: {avail} (via '{strat}')")
 
+        # Image
+        image, strat = run_strategies(soup, self.addon["product_image"]["strategies"])
+        result["image_url"] = image
+
         result["ok"] = result["price"] is not None
         return result
-
-
-
-# Quick CLI test
-if __name__ == "__main__":
-    import sys
-
-    addon_path = sys.argv[1] if len(sys.argv) > 1 else "addons/kabum.json"
-    url = sys.argv[2] if len(sys.argv) > 2 else (
-        "https://www.kabum.com.br/produto/463543/placa-de-video-rx-7600-series-graphics-cards-xfx-amd-radeon-8gb-gddr6-rx-76pqickby"
-    )
-
-    scraper = AddonScraper(addon_path)
-    data = scraper.scrape(url)
-
-    if data["ok"]:
-        scraper.save_to_db(data)
-
-    print("\n──────────────────────────────")
-    print("Final result:")
-    print(json.dumps(data, indent=2, ensure_ascii=False))

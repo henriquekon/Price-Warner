@@ -1,3 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
 .venv/
-debug.html
-*.db
+env/
+
+# Database
+data/*.db
+*.db-journal
+
+# Streamlit
+.streamlit/
+
+.env

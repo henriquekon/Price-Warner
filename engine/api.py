@@ -42,7 +42,15 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
     # Checks if the store exists before adding the product
     store = db.query(Store).filter(Store.id == prod.store_id).first()
     if not store:
-        raise HTTPException(status_code=404, detail="Store not found. Please register the store or run the scraper once.")
+        if not store:
+            print(f"[*] Loja '{prod.store_id}' nao encontrada no banco. Registrando automaticamente...")
+            store = Store(
+                id=prod.store_id,
+                name=prod.store_id.capitalize(),  # Transforma 'kabum' em 'Kabum'
+                is_active=True
+            )
+            db.add(store)
+            db.commit()
     
     data = prod.dict()
     if data.get("interval") is None:

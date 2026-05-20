@@ -8,7 +8,7 @@ from engine.notifier import Notifier
 def check_price_alerts(session, product, current_price):
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
     
-    # Busca estatísticas do período
+    # Searches for prices
     stats = session.query(
         func.avg(PriceHistory.price).label('avg_price'),
         func.min(PriceHistory.price).label('min_recent')
@@ -21,7 +21,7 @@ def check_price_alerts(session, product, current_price):
     avg_price = stats.avg_price
     min_recent = stats.min_recent
 
-    # Se não houver histórico (produto novo), não há base para comparação relativa ainda
+    # If no history is available (new product), there's no basis for relative comparison yet
     if avg_price is None:
         return []
 
@@ -58,10 +58,8 @@ async def price_scheduler():
                     if data["ok"]:
                         current_price = data["price"]
                         
-                        # At this point, we have the current price and can check for alerts before saving
                         alerts = check_price_alerts(db, product, current_price)
                         
-                        # Then, we save the price history regardless of alerts, to maintain a complete record
                         scraper.save_to_db(data)
                         
                         if alerts:

@@ -8,7 +8,10 @@ from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
 from engine.email_service import send_email
-from engine.alert_rules import opportunity_reasons, should_notify
+from engine.alert_rules import opportunity_reasons
+from engine.cycle_rules import evaluate_cycle, mark_delivered
+from engine.cycle_state import read_snapshot, write_snapshot
+from data.models import PriceCycleState
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +50,38 @@ def check_product(product_id: int, notifier: Notifier):
             if not result["ok"]:
                 raise ValueError("No valid price extracted")
 
+            cutoff = now - timedelta(days=30)
+            prior_prices = [row[0] for row in db.query(PriceHistory.price).filter(
+                PriceHistory.product_id == product.id,
+                PriceHistory.fetched_at >= cutoff,
+                PriceHistory.price.is_not(None),
+                PriceHistory.availability != "out_of_stock",
+            ).all()]
             account_alerts = []
             for monitoring in monitorings:
+                state = db.get(PriceCycleState, monitoring.id)
+                if state is None:
+                    state = PriceCycleState(monitoring_id=monitoring.id)
+                    db.add(state)
+                    db.flush()
+                    previous_delivery = db.query(NotificationEvent).filter(
+                        NotificationEvent.monitoring_id == monitoring.id,
+                        NotificationEvent.status == "sent",
+                    ).order_by(NotificationEvent.sent_at.desc()).first()
+                    if previous_delivery is not None:
+                        prior_alert = db.get(PriceHistory, previous_delivery.price_history_id)
+                        if prior_alert is not None:
+                            state.last_alert_price = prior_alert.price
+                            state.last_alert_at = previous_delivery.sent_at
                 if product.last_checked is not None and now < product.last_checked + timedelta(minutes=monitoring.interval):
                     continue
-                from types import SimpleNamespace
-                rule = SimpleNamespace(id=product.id, target_drop_percentage=monitoring.target_drop_percentage)
-                reasons = check_price_alerts(db, rule, result["price"])
-                if reasons:
-                    account_alerts.append((monitoring.id, monitoring.user_id, reasons))
+                if result.get("availability") == "out_of_stock":
+                    continue
+                decision = evaluate_cycle(read_snapshot(state), prior_prices, result["price"],
+                                          monitoring.target_drop_percentage, now)
+                write_snapshot(state, decision.snapshot)
+                if decision.should_send:
+                    account_alerts.append((monitoring.id, monitoring.user_id, decision.reasons))
             history = PriceHistory(
                 product_id=product.id,
                 price=result["price"],
@@ -75,24 +101,8 @@ def check_product(product_id: int, notifier: Notifier):
                 settings = db.get(NotificationSettings, user_id)
                 if not settings or not settings.enabled:
                     continue
-                latest = db.query(NotificationEvent).filter(
-                    NotificationEvent.monitoring_id == monitoring_id,
-                    NotificationEvent.status == "sent",
-                ).order_by(NotificationEvent.sent_at.desc()).first()
-                last_sent_price = None
-                prices_since_last_sent = []
-                if latest is not None:
-                    previous = db.get(PriceHistory, latest.price_history_id)
-                    if previous is not None:
-                        last_sent_price = previous.price
-                    if latest.sent_at is not None:
-                        prices_since_last_sent = [row[0] for row in db.query(PriceHistory.price).filter(
-                            PriceHistory.product_id == product.id,
-                            PriceHistory.fetched_at > latest.sent_at,
-                            PriceHistory.id != history.id,
-                            PriceHistory.price.is_not(None),
-                        ).all()]
-                if not should_notify(result["price"], last_sent_price, prices_since_last_sent):
+                state = db.get(PriceCycleState, monitoring_id)
+                if state is None:
                     continue
                 event = NotificationEvent(monitoring_id=monitoring_id,
                                           price_history_id=history.id, status='pending')
@@ -108,6 +118,7 @@ def check_product(product_id: int, notifier: Notifier):
                 else:
                     event.status = 'sent'
                     event.sent_at = datetime.utcnow()
+                    write_snapshot(state, mark_delivered(read_snapshot(state), result["price"], event.sent_at))
                 db.commit()
                 if event.status == "sent":
                     try:

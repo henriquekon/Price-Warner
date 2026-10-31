@@ -113,3 +113,18 @@ class NotificationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class PriceCycleState(Base):
+    """Per-monitoring reference and notification state, independent of shared history."""
+    __tablename__ = "price_cycle_states"
+    monitoring_id: Mapped[int] = mapped_column(ForeignKey("monitorings.id"), primary_key=True)
+    first_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candidate_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    confirmed_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_alert_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_alert_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recovered_since_alert: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

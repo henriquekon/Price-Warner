@@ -12,6 +12,7 @@ services:
       SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
       RUN_SCHEDULER: "false"
       AUTH_MODE: ${AUTH_MODE:-local}
+      SMTP_ENCRYPTION_KEY: ${SMTP_ENCRYPTION_KEY:-}
       PRICE_WARNER_DATA_DIR: /app/storage
     volumes: &common_volumes
       - ./data:/app/storage:z

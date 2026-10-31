@@ -4,10 +4,11 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func
 
-from data.models import PriceHistory, Product, SessionLocal, Monitoring
+from data.models import PriceHistory, Product, SessionLocal, Monitoring, NotificationSettings, NotificationEvent, User
 from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
+from engine.email_service import send_email
 
 logger = logging.getLogger(__name__)
 
@@ -68,23 +69,48 @@ def check_product(product_id: int, notifier: Notifier):
                 rule = SimpleNamespace(id=product.id, target_drop_percentage=monitoring.target_drop_percentage)
                 reasons = check_price_alerts(db, rule, result["price"])
                 if reasons:
-                    account_alerts.append((monitoring.user_id, reasons))
-            db.add(PriceHistory(
+                    account_alerts.append((monitoring.id, monitoring.user_id, reasons))
+            history = PriceHistory(
                 product_id=product.id,
                 price=result["price"],
                 availability=result.get("availability") or "unknown",
                 strategy_used=result.get("strategies_used", {}).get("price"),
-            ))
+            )
+            db.add(history)
+            db.flush()
             product.last_checked = now
             product.last_error = None
             db.commit()
 
-            for user_id, reasons in account_alerts:
-                notifier.send(
-                    f"OPPORTUNITY for account {user_id}: {product.name}\n"
-                    f"Price: R$ {result['price']:.2f}\n"
-                    f"Reason: {' | '.join(reasons)}\nLink: {product.url}"
-                )
+            for monitoring_id, user_id, reasons in account_alerts:
+                message = (f"OPPORTUNITY for account {user_id}: {product.name}\n"
+                           f"Price: R$ {result['price']:.2f}\n"
+                           f"Reason: {' | '.join(reasons)}\nLink: {product.url}")
+                notifier.send(message)
+                settings = db.get(NotificationSettings, user_id)
+                if not settings or not settings.enabled:
+                    continue
+                latest = db.query(NotificationEvent).filter(
+                    NotificationEvent.monitoring_id == monitoring_id,
+                    NotificationEvent.status == 'sent'
+                ).order_by(NotificationEvent.sent_at.desc()).first()
+                if latest and latest.sent_at and now < latest.sent_at + timedelta(hours=settings.cooldown_hours):
+                    continue
+                event = NotificationEvent(monitoring_id=monitoring_id,
+                                          price_history_id=history.id, status='pending')
+                db.add(event)
+                db.commit()
+                try:
+                    send_email(settings, settings.recipient_email,
+                               f"Price-Warner: price opportunity for {product.name}", message)
+                except Exception as exc:
+                    event.status = 'failed'
+                    event.error = type(exc).__name__[:300]
+                    logger.exception('Email delivery failed for monitoring %s', monitoring_id)
+                else:
+                    event.status = 'sent'
+                    event.sent_at = datetime.utcnow()
+                db.commit()
         except Exception as exc:
             db.rollback()
             product.last_error = str(exc)[:500]

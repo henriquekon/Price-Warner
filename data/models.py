@@ -87,3 +87,29 @@ class AuthSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     csrf_token: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class NotificationSettings(Base):
+    __tablename__ = "notification_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    recipient_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    smtp_host: Mapped[str] = mapped_column(String(253), default="", nullable=False)
+    smtp_port: Mapped[int] = mapped_column(Integer, default=587, nullable=False)
+    smtp_security: Mapped[str] = mapped_column(String(20), default="starttls", nullable=False)
+    smtp_username: Mapped[str] = mapped_column(String(320), default="", nullable=False)
+    smtp_password_encrypted: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    from_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    cooldown_hours: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
+
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+    __table_args__ = (UniqueConstraint("monitoring_id", "price_history_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    monitoring_id: Mapped[int] = mapped_column(ForeignKey("monitorings.id"), nullable=False)
+    price_history_id: Mapped[int] = mapped_column(ForeignKey("price_history.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)

@@ -174,6 +174,25 @@ def index_page():
                     <!-- Itens monitorados vão aqui -->
                 </div>
             </section>
+
+            <section class="bg-gray-800 border border-gray-700 rounded-2xl p-6 mt-10 max-w-2xl mx-auto">
+                <h2 class="text-xl font-semibold mb-2">Email notifications</h2>
+                <p class="text-sm text-gray-400 mb-5">Configure your own SMTP account. Passwords are encrypted before storage.</p>
+                <form id="email-settings" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="text-sm col-span-full"><input id="mail-enabled" type="checkbox" class="mr-2">Enable email alerts</label>
+                    <input id="mail-host" placeholder="SMTP host" required class="bg-gray-900 border border-gray-600 rounded p-2">
+                    <input id="mail-port" type="number" min="1" max="65535" placeholder="Port" value="587" required class="bg-gray-900 border border-gray-600 rounded p-2">
+                    <select id="mail-security" class="bg-gray-900 border border-gray-600 rounded p-2"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option></select>
+                    <input id="mail-user" placeholder="SMTP username" class="bg-gray-900 border border-gray-600 rounded p-2">
+                    <input id="mail-password" type="password" autocomplete="new-password" placeholder="SMTP password (leave blank to keep)" class="bg-gray-900 border border-gray-600 rounded p-2 col-span-full">
+                    <input id="mail-from" type="email" placeholder="Sender email" class="bg-gray-900 border border-gray-600 rounded p-2">
+                    <input id="mail-recipient" type="email" placeholder="Recipient email" class="bg-gray-900 border border-gray-600 rounded p-2">
+                    <label class="col-span-full text-sm">Cooldown (hours) <input id="mail-cooldown" type="number" min="1" max="720" value="24" class="bg-gray-900 border border-gray-600 rounded p-2 ml-2 w-24"></label>
+                    <button type="submit" class="bg-orange-500 rounded p-2 font-semibold">Save settings</button>
+                    <button id="mail-test" type="button" class="bg-gray-700 rounded p-2 font-semibold">Send test email</button>
+                </form>
+                <p id="mail-status" class="text-sm text-gray-300 mt-3" role="status"></p>
+            </section>
         </div>
 
         <!-- Notificação Flutuante (Toast) -->
@@ -417,8 +436,61 @@ def index_page():
                 }, 2500);
             }
 
+            async function loadEmailSettings() {
+                const response = await fetch('/notifications/settings');
+                if (!response.ok) return;
+                const data = await response.json();
+                const fields = {enabled:'mail-enabled', recipient_email:'mail-recipient',
+                    smtp_host:'mail-host', smtp_port:'mail-port', smtp_security:'mail-security',
+                    smtp_username:'mail-user', from_email:'mail-from', cooldown_hours:'mail-cooldown'};
+                for (const [key, id] of Object.entries(fields)) {
+                    const node = document.getElementById(id);
+                    if (key === 'enabled') node.checked = data[key];
+                    else node.value = data[key] ?? '';
+                }
+                document.getElementById('mail-password').placeholder = data.has_password
+                    ? 'Password saved (leave blank to keep)' : 'SMTP password';
+            }
+
+            document.getElementById('email-settings').addEventListener('submit', async event => {
+                event.preventDefault();
+                const status = document.getElementById('mail-status');
+                const payload = {
+                    enabled: document.getElementById('mail-enabled').checked,
+                    smtp_host: document.getElementById('mail-host').value,
+                    smtp_port: Number(document.getElementById('mail-port').value),
+                    smtp_security: document.getElementById('mail-security').value,
+                    smtp_username: document.getElementById('mail-user').value,
+                    from_email: document.getElementById('mail-from').value || null,
+                    recipient_email: document.getElementById('mail-recipient').value || null,
+                    cooldown_hours: Number(document.getElementById('mail-cooldown').value)
+                };
+                const password = document.getElementById('mail-password').value;
+                if (password) payload.smtp_password = password;
+                try {
+                    const response = await fetch('/notifications/settings', {method:'PUT',
+                        headers:{'Content-Type':'application/json', ...(csrfToken ? {'X-CSRF-Token':csrfToken} : {})},
+                        body:JSON.stringify(payload)});
+                    if (!response.ok) throw new Error(`HTTP ${response.status}: ${JSON.stringify((await response.json()).detail)}`);
+                    status.textContent = 'Email settings saved.';
+                    document.getElementById('mail-password').value = '';
+                    await loadEmailSettings();
+                } catch (error) { status.textContent = `Could not save settings: ${error.message}`; }
+            });
+
+            document.getElementById('mail-test').addEventListener('click', async () => {
+                const status = document.getElementById('mail-status');
+                status.textContent = 'Sending test email...';
+                try {
+                    const response = await fetch('/notifications/test', {method:'POST',
+                        headers: csrfToken ? {'X-CSRF-Token':csrfToken} : {}});
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    status.textContent = 'Test email sent.';
+                } catch (error) { status.textContent = `Test failed: ${error.message}`; }
+            });
+
             // Inicialização automática ao abrir a página
-            window.onload = async () => { if (await initializeAuth()) loadMonitoredProducts(); };
+            window.onload = async () => { if (await initializeAuth()) { loadMonitoredProducts(); loadEmailSettings(); } };
         </script>
     </body>
     </html>

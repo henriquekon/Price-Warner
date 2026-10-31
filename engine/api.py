@@ -3,11 +3,13 @@ import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, Query as FastAPIQuery
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from data.models import SessionLocal, Product, Store
+from data.models import SessionLocal, Product, Store, Monitoring, User
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from engine.scraper import AddonScraper
 from engine.config import ADDONS_DIR
+from engine.auth import current_user
 
 router = APIRouter()
 
@@ -28,50 +30,70 @@ def get_db():
         db.close()
 
 @router.get("/products")
-def get_all_products(db: Session = Depends(get_db)):
-    return db.query(Product).all()
+def get_all_products(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = db.query(Product, Monitoring).join(Monitoring, Monitoring.product_id == Product.id).filter(Monitoring.user_id == user.id).all()
+    return [product_response(product, monitoring) for product, monitoring in rows]
+
+
+def product_response(product: Product, monitoring: Monitoring):
+    return {"id": product.id, "name": product.name, "url": product.url, "image_url": product.image_url,
+            "store_id": product.store_id, "interval": monitoring.interval,
+            "target_drop_percentage": monitoring.target_drop_percentage,
+            "is_active": monitoring.is_active, "last_checked": product.last_checked,
+            "last_error": product.last_error}
+
 
 # Search by name
 @router.get("/products/search")
-def search_products(q: str = FastAPIQuery(..., min_length=1), db: Session = Depends(get_db)):
-    results = db.query(Product).filter(Product.name.ilike(f"%{q}%")).all()
-    return results
+def search_products(q: str = FastAPIQuery(..., min_length=1), db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = db.query(Product, Monitoring).join(Monitoring, Monitoring.product_id == Product.id).filter(
+        Monitoring.user_id == user.id, Product.name.ilike(f"%{q}%")).all()
+    return [product_response(product, monitoring) for product, monitoring in rows]
 
-@router.post("/products")
-def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
-    if db.query(Product).filter(Product.url == prod.url).first():
-        raise HTTPException(status_code=409, detail="Product URL is already monitored")
-
-    # Checks if the store exists before adding the product
-    store = db.query(Store).filter(Store.id == prod.store_id).first()
-    if not store:
-        addon_path = ADDONS_DIR / f"{prod.store_id}.json"
-        if not addon_path.is_file():
-            raise HTTPException(status_code=400, detail="Unsupported store addon")
-        store = Store(id=prod.store_id, name=prod.store_id.capitalize(), is_active=True)
-        db.add(store)
+@router.post("/products", status_code=201)
+def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    addon_path = ADDONS_DIR / f"{prod.store_id}.json"
+    if not addon_path.is_file():
+        raise HTTPException(400, "Unsupported store addon")
+    product = db.query(Product).filter(Product.url == prod.url).first()
+    if product:
+        monitored = db.query(Monitoring).filter(Monitoring.product_id == product.id, Monitoring.user_id == user.id).first()
+        if monitored:
+            raise HTTPException(409, "Product is already monitored by this account")
+    else:
+        store = db.get(Store, prod.store_id)
+        if not store:
+            db.add(Store(id=prod.store_id, name=prod.store_id.capitalize(), is_active=True))
+            db.flush()
+        product = Product(name=prod.name, url=prod.url, store_id=prod.store_id,
+                          interval=prod.interval, target_drop_percentage=prod.target_drop_percentage)
+        db.add(product)
         db.flush()
-
-    data = prod.model_dump()
-
-    db_product = Product(**data)
-    db.add(db_product)
+    db.add(Monitoring(user_id=user.id, product_id=product.id,
+                      interval=prod.interval, target_drop_percentage=prod.target_drop_percentage))
     try:
         db.commit()
-    except Exception as exc:
-        from sqlalchemy.exc import IntegrityError
+    except IntegrityError as exc:
         db.rollback()
-        if isinstance(exc, IntegrityError):
-            raise HTTPException(status_code=409, detail="Product URL is already monitored") from exc
-        raise
-    db.refresh(db_product)
-    
-    return {"message": "Product added successfully", "product_id": db_product.id}
+        raise HTTPException(409, "Product is already monitored or concurrently registered") from exc
+    return {"message": "Product monitoring created", "product_id": product.id}
+
+
+@router.delete("/products/{product_id}")
+def stop_monitoring(product_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    monitoring = db.query(Monitoring).filter(Monitoring.user_id == user.id, Monitoring.product_id == product_id).first()
+    if not monitoring:
+        raise HTTPException(404, "Monitoring not found")
+    db.delete(monitoring)
+    db.commit()
+    return {"message": "Monitoring removed"}
+
 
 @router.get("/products/search-external")
 def search_external_store(
     q: str = FastAPIQuery(..., min_length=2), 
-    store_id: str = FastAPIQuery(default="kabum", pattern=r"^[a-z0-9_-]+$")
+    store_id: str = FastAPIQuery(default="kabum", pattern=r"^[a-z0-9_-]+$"),
+    user: User = Depends(current_user),
 ):
     """
     Triggers real-time store search delegating all rules to the scraper and addons.
@@ -160,6 +182,33 @@ def index_page():
         </div>
 
         <script>
+            let csrfToken = null;
+            async function initializeAuth() {
+                const config = await (await fetch('/auth/config')).json();
+                if (config.mode === 'local') return true;
+                const me = await fetch('/auth/me');
+                if (me.ok) {
+                    const response = await fetch('/auth/csrf');
+                    csrfToken = (await response.json()).csrf_token;
+                    return true;
+                }
+                document.body.innerHTML = `<main style="max-width:420px;margin:5rem auto;font-family:sans-serif;color:white">
+                  <h1>Price-Warner</h1><h2>Sign in</h2>
+                  <form id="login-form"><input id="email" type="email" required placeholder="Email" style="display:block;margin:12px 0;padding:12px;width:100%">
+                  <input id="password" type="password" minlength="12" required placeholder="Password" style="display:block;margin:12px 0;padding:12px;width:100%">
+                  <button type="submit">Sign in</button></form><p id="auth-error"></p>
+                  ${config.registration_enabled ? '<button id="register">Create account</button>' : ''}</main>`;
+                async function submitAuth(path) {
+                    const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({email:document.getElementById('email').value,
+                            password:document.getElementById('password').value})});
+                    if (response.ok) location.reload();
+                    else document.getElementById('auth-error').textContent = (await response.json()).detail || 'Authentication failed';
+                }
+                document.getElementById('login-form').onsubmit = event => {event.preventDefault();submitAuth('/auth/login')};
+                if (config.registration_enabled) document.getElementById('register').onclick = () => submitAuth('/auth/register');
+                return false;
+            }
             let monitoredProductKeys = new Set();
             const searchCards = [];
 
@@ -289,7 +338,7 @@ def index_page():
                 try {
                     const response = await fetch('/products', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', ...(csrfToken ? {'X-CSRF-Token':csrfToken} : {}) },
                         body: JSON.stringify(payload)
                     });
 
@@ -369,7 +418,7 @@ def index_page():
             }
 
             // Inicialização automática ao abrir a página
-            window.onload = loadMonitoredProducts;
+            window.onload = async () => { if (await initializeAuth()) loadMonitoredProducts(); };
         </script>
     </body>
     </html>

@@ -5,8 +5,9 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from data.models import init_db
+from engine.migrations import upgrade
 from engine.api import router as api_router
+from engine.auth_api import router as auth_router
 from engine.core import price_scheduler
 from engine.config import RUN_SCHEDULER
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    upgrade()
     task = asyncio.create_task(price_scheduler()) if RUN_SCHEDULER else None
     try:
         yield
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Price-Warner Server", lifespan=lifespan)
+app.include_router(auth_router)
 app.include_router(api_router)
 
 if __name__ == "__main__":

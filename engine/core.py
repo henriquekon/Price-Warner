@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func
 
-from data.models import PriceHistory, Product, SessionLocal
+from data.models import PriceHistory, Product, SessionLocal, Monitoring
 from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
@@ -42,9 +42,13 @@ def check_product(product_id: int, notifier: Notifier):
         product = db.get(Product, product_id)
         if product is None or not product.is_active:
             return
+        monitorings = db.query(Monitoring).filter(Monitoring.product_id == product_id, Monitoring.is_active.is_(True)).all()
+        if not monitorings:
+            return
 
         now = datetime.utcnow()
-        if product.last_checked is not None and now < product.last_checked + timedelta(minutes=product.interval):
+        interval = min(m.interval for m in monitorings)
+        if product.last_checked is not None and now < product.last_checked + timedelta(minutes=interval):
             return
 
         logger.info("Checking product %s", product.name)
@@ -56,7 +60,15 @@ def check_product(product_id: int, notifier: Notifier):
             if not result["ok"]:
                 raise ValueError("No valid price extracted")
 
-            alerts = check_price_alerts(db, product, result["price"])
+            account_alerts = []
+            for monitoring in monitorings:
+                if product.last_checked is not None and now < product.last_checked + timedelta(minutes=monitoring.interval):
+                    continue
+                from types import SimpleNamespace
+                rule = SimpleNamespace(id=product.id, target_drop_percentage=monitoring.target_drop_percentage)
+                reasons = check_price_alerts(db, rule, result["price"])
+                if reasons:
+                    account_alerts.append((monitoring.user_id, reasons))
             db.add(PriceHistory(
                 product_id=product.id,
                 price=result["price"],
@@ -67,11 +79,11 @@ def check_product(product_id: int, notifier: Notifier):
             product.last_error = None
             db.commit()
 
-            if alerts:
+            for user_id, reasons in account_alerts:
                 notifier.send(
-                    f"OPPORTUNITY: {product.name}\n"
+                    f"OPPORTUNITY for account {user_id}: {product.name}\n"
                     f"Price: R$ {result['price']:.2f}\n"
-                    f"Reason: {' | '.join(alerts)}\nLink: {product.url}"
+                    f"Reason: {' | '.join(reasons)}\nLink: {product.url}"
                 )
         except Exception as exc:
             db.rollback()
@@ -84,8 +96,13 @@ def check_product(product_id: int, notifier: Notifier):
 def run_due_checks(notifier: Notifier):
     now = datetime.utcnow()
     with SessionLocal() as db:
-        due_ids = [product.id for product in db.query(Product).filter(Product.is_active.is_(True)).all()
-                   if product.last_checked is None or now >= product.last_checked + timedelta(minutes=product.interval)]
+        monitorings = db.query(Monitoring).filter(Monitoring.is_active.is_(True)).all()
+        intervals = {}
+        for monitoring in monitorings:
+            intervals[monitoring.product_id] = min(monitoring.interval, intervals.get(monitoring.product_id, monitoring.interval))
+        products = db.query(Product).filter(Product.is_active.is_(True), Product.id.in_(intervals)).all() if intervals else []
+        due_ids = [product.id for product in products
+                   if product.last_checked is None or now >= product.last_checked + timedelta(minutes=intervals[product.id])]
     for product_id in due_ids:
         check_product(product_id, notifier)
 

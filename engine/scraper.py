@@ -3,8 +3,8 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
-from fake_useragent import UserAgent
-from data.models import Store, init_db, SessionLocal, Product, PriceHistory
+from urllib.parse import urlparse
+import time
 
 # Value Transformations
 def transform_value(raw, transform: str):
@@ -16,12 +16,15 @@ def transform_value(raw, transform: str):
         if isinstance(raw, (int, float)):
             return float(raw)
         cleaned = re.sub(r"[^\d.,]", "", str(raw))
-        cleaned = cleaned.replace(",", ".")
+        if "," in cleaned:
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        elif cleaned.count(".") > 1:
+            cleaned = cleaned.replace(".", "")
         return float(cleaned)
 
     if transform == "comma_decimal_to_float":
-        cleaned = re.sub(r"[^\d,]", "", str(raw))
-        cleaned = cleaned.replace(",", ".")
+        cleaned = re.sub(r"[^\d.,]", "", str(raw))
+        cleaned = cleaned.replace(".", "").replace(",", ".") if "," in cleaned else cleaned
         return float(cleaned)
 
     return raw
@@ -135,65 +138,43 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 
 class AddonScraper:
     def __init__(self, addon_path: str):
-        init_db()
-        with open(addon_path, "r", encoding="utf-8") as f:
-            self.addon = json.load(f)
-        self.ua = UserAgent()
-        self.client = httpx.Client(http2=True, timeout=15)
+        with open(addon_path, "r", encoding="utf-8") as file:
+            self.addon = json.load(file)
+        self.client = httpx.Client(http2=True)
+        self._last_request_at = None
 
-    def save_to_db(self, scrape_result: dict):
-        session = SessionLocal()
-        try:
-            store = session.query(Store).filter(Store.id == scrape_result["store"]).first()
-            if not store:
-                store = Store(
-                    id=scrape_result["store"],
-                    name=scrape_result["store_name"]
-                )
-                session.add(store)
-                session.commit()
-                session.refresh(store)
+    def __enter__(self):
+        return self
 
-            product = session.query(Product).filter(Product.url == scrape_result["url"]).first()
-            
-            if not product:
-                product = Product(
-                    name=scrape_result["product_name"],
-                    url=scrape_result["url"],
-                    image_url=scrape_result.get("image_url"),
-                    store_id=store.id,
-                    interval=30,
-                )
-                session.add(product)
-                session.commit()
-                session.refresh(product)
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
-            new_history = PriceHistory(
-                product_id=product.id,
-                price=scrape_result["price"],
-                availability=scrape_result["availability"] or "unknown",
-                strategy_used=str(scrape_result["strategies_used"].get("price"))
-            )
-            session.add(new_history)
-            session.commit()
-            print(f"[DB] Data saved successfully for product ID: {product.id}")
-            
-        except Exception as e:
-            session.rollback()
-            print(f"[ERROR] Failed to save to database: {e}")
-        finally:
-            session.close()
+    def close(self):
+        self.client.close()
 
     def _make_request(self, url: str) -> httpx.Response:
         cfg = self.addon.get("request", {})
-        headers = cfg.get("headers", {})
-        headers["User-Agent"] = self.ua.random
+        base = urlparse(self.addon["store"]["base_url"])
+        requested = urlparse(url)
+        if (requested.scheme != "https" or requested.hostname != base.hostname or
+                requested.username or requested.password or requested.port):
+            raise ValueError("Request URL must use the addon store's HTTPS hostname")
 
-        timeout = cfg.get("timeout", 15)
+        limit = max(0.0, float(cfg.get("rate_limit_seconds", 0)))
+        if self._last_request_at is not None:
+            remaining = limit - (time.monotonic() - self._last_request_at)
+            if remaining > 0:
+                time.sleep(remaining)
 
-        resp = self.client.get(url, follow_redirects=True)
-        resp.raise_for_status()
-        return resp
+        headers = {**cfg.get("headers", {}), "User-Agent": "Price-Warner/0.1 (self-hosted price monitor)"}
+        timeout = float(cfg.get("timeout", 15))
+        self._last_request_at = time.monotonic()
+        response = self.client.request(
+            cfg.get("method", "GET").upper(), url, headers=headers,
+            timeout=timeout, follow_redirects=False,
+        )
+        response.raise_for_status()
+        return response
 
     def scrape(self, url: str) -> dict:
         """

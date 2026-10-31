@@ -1,11 +1,13 @@
-import os
-import time
+import logging
+from pathlib import Path
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+LOG_FILE = Path(__file__).resolve().parent.parent / "notifications.log"
+
 
 class Notifier:
-    def __init__(self):
-        pass
-
     def send(self, message: str):
-        print(f"\n[ALERT] Notification sent: {message}")
-        with open("notifications.log", "a", encoding="utf-8") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+        logger.info("Notification generated: %s", message)
+        with LOG_FILE.open("a", encoding="utf-8") as file:
+            file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")

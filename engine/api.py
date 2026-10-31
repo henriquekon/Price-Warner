@@ -7,17 +7,17 @@ from data.models import SessionLocal, Product, Store
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from engine.scraper import AddonScraper
+from engine.config import ADDONS_DIR
 
 router = APIRouter()
-ADDONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "addons")
 
 # Schema for creating a new product
 class ProductCreate(BaseModel):
     name: str
     url: str
-    store_id: str
-    interval: Optional[int] = Field(default=30, description="Interval in minutes")
-    target_drop_percentage: Optional[float] = 10.0
+    store_id: str = Field(pattern=r"^[a-z0-9_-]+$")
+    interval: int = Field(default=30, ge=1, le=10080, description="Interval in minutes")
+    target_drop_percentage: float = Field(default=10.0, ge=0, le=100)
 
 # Dependency to get DB session
 def get_db():
@@ -42,23 +42,25 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
     # Checks if the store exists before adding the product
     store = db.query(Store).filter(Store.id == prod.store_id).first()
     if not store:
-        if not store:
-            print(f"[*] Loja '{prod.store_id}' nao encontrada no banco. Registrando automaticamente...")
-            store = Store(
-                id=prod.store_id,
-                name=prod.store_id.capitalize(),  # Transforma 'kabum' em 'Kabum'
-                is_active=True
-            )
-            db.add(store)
-            db.commit()
-    
-    data = prod.dict()
-    if data.get("interval") is None:
-        data["interval"] = 30
+        addon_path = ADDONS_DIR / f"{prod.store_id}.json"
+        if not addon_path.is_file():
+            raise HTTPException(status_code=400, detail="Unsupported store addon")
+        store = Store(id=prod.store_id, name=prod.store_id.capitalize(), is_active=True)
+        db.add(store)
+        db.flush()
+
+    data = prod.model_dump()
 
     db_product = Product(**data)
     db.add(db_product)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        from sqlalchemy.exc import IntegrityError
+        db.rollback()
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(status_code=409, detail="Product URL is already monitored") from exc
+        raise
     db.refresh(db_product)
     
     return {"message": "Product added successfully", "product_id": db_product.id}
@@ -66,17 +68,17 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
 @router.get("/products/search-external")
 def search_external_store(
     q: str = FastAPIQuery(..., min_length=2), 
-    store_id: str = FastAPIQuery(default="kabum")
+    store_id: str = FastAPIQuery(default="kabum", pattern=r"^[a-z0-9_-]+$")
 ):
     """
     Triggers real-time store search delegating all rules to the scraper and addons.
     """
-    addon_path = os.path.join(ADDONS_DIR, f"{store_id}.json")
+    addon_path = ADDONS_DIR / f"{store_id}.json"
     if not os.path.exists(addon_path):
         raise HTTPException(status_code=404, detail=f"Store addon '{store_id}' not found.")
         
-    scraper = AddonScraper(addon_path)
-    results = scraper.search_external(q)
+    with AddonScraper(addon_path) as scraper:
+        results = scraper.search_external(q)
 
     print(f"[DEBUG API] Returned: {len(results)}")
     print(f"[DEBUG API] Data returned: {results}\n")

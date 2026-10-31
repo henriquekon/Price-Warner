@@ -1,14 +1,12 @@
-# Python
 __pycache__/
 *.py[cod]
 .venv/
 env/
-
-# Database
-data/*.db
-*.db-journal
-
-# Streamlit
-.streamlit/
-
+.pytest_cache/
 .env
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+notifications.log
+.streamlit/

@@ -1,13 +1,16 @@
 from datetime import datetime
-from pathlib import Path
 import os
 from typing import List
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "database.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.getenv("PRICE_WARNER_DATA_DIR", BASE_DIR)
+
+os.makedirs(DB_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DB_DIR, "database.db")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})

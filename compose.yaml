@@ -1,3 +1,4 @@
+
 services:
   api:
     build: .
@@ -6,14 +7,15 @@ services:
     ports:
       - "${PRICE_WARNER_BIND:-127.0.0.1}:${PRICE_WARNER_PORT:-9873}:9873"
     environment: &common_environment
-      DATABASE_URL: sqlite:////app/data/database.db
+      DATABASE_URL: sqlite:////app/storage/database.db
       ADDONS_DIR: /app/addons
-      NOTIFICATION_LOG_PATH: /app/data/notifications.log
+      NOTIFICATION_LOG_PATH: /app/storage/notifications.log
       SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
       RUN_SCHEDULER: "false"
+      PRICE_WARNER_DATA_DIR: /app/storage
     volumes: &common_volumes
-      - ./data:/app/data
-      - ./addons:/app/addons:ro
+      - ./data:/app/storage:z
+      - ./addons:/app/addons:ro,z
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9873/docs', timeout=5)"]
       interval: 30s

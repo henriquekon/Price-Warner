@@ -187,7 +187,7 @@ def index_page():
                     <input id="mail-password" type="password" autocomplete="new-password" placeholder="SMTP password (leave blank to keep)" class="bg-gray-900 border border-gray-600 rounded p-2 col-span-full">
                     <input id="mail-from" type="email" placeholder="Sender email" class="bg-gray-900 border border-gray-600 rounded p-2">
                     <input id="mail-recipient" type="email" placeholder="Recipient email" class="bg-gray-900 border border-gray-600 rounded p-2">
-                    <label class="col-span-full text-sm">Cooldown (hours) <input id="mail-cooldown" type="number" min="1" max="720" value="24" class="bg-gray-900 border border-gray-600 rounded p-2 ml-2 w-24"></label>
+                    <label class="col-span-full text-sm">Legacy cooldown (unused by event-based alerts) <input id="mail-cooldown" type="number" min="1" max="720" value="24" class="bg-gray-900 border border-gray-600 rounded p-2 ml-2 w-24"></label>
                     <button type="submit" class="bg-orange-500 rounded p-2 font-semibold">Save settings</button>
                     <button id="mail-test" type="button" class="bg-gray-700 rounded p-2 font-semibold">Send test email</button>
                 </form>

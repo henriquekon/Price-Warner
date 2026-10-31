@@ -2,40 +2,26 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func
 
 from data.models import PriceHistory, Product, SessionLocal, Monitoring, NotificationSettings, NotificationEvent, User
 from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
 from engine.email_service import send_email
+from engine.alert_rules import opportunity_reasons, should_notify
 
 logger = logging.getLogger(__name__)
 
 
 def check_price_alerts(session, product, current_price):
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    stats = session.query(
-        func.avg(PriceHistory.price).label("avg_price"),
-        func.min(PriceHistory.price).label("min_recent"),
-    ).filter(
+    """Evaluate changes against a robust 30-day reference before saving the new price."""
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    prices = [row[0] for row in session.query(PriceHistory.price).filter(
         PriceHistory.product_id == product.id,
-        PriceHistory.fetched_at >= thirty_days_ago,
+        PriceHistory.fetched_at >= cutoff,
         PriceHistory.price.is_not(None),
-    ).one()
-
-    if stats.avg_price is None:
-        return []
-
-    alerts = []
-    threshold = product.target_drop_percentage / 100
-    if current_price <= stats.avg_price * (1 - threshold):
-        alerts.append(
-            f"Relevant drop from recent average (R$ {stats.avg_price:.2f} -> R$ {current_price:.2f})"
-        )
-    if current_price < stats.min_recent:
-        alerts.append(f"New 30-day low (Previous: R$ {stats.min_recent:.2f})")
-    return alerts
+    ).all()]
+    return opportunity_reasons(prices, current_price, product.target_drop_percentage)
 
 
 def check_product(product_id: int, notifier: Notifier):
@@ -86,15 +72,27 @@ def check_product(product_id: int, notifier: Notifier):
                 message = (f"OPPORTUNITY for account {user_id}: {product.name}\n"
                            f"Price: R$ {result['price']:.2f}\n"
                            f"Reason: {' | '.join(reasons)}\nLink: {product.url}")
-                notifier.send(message)
                 settings = db.get(NotificationSettings, user_id)
                 if not settings or not settings.enabled:
                     continue
                 latest = db.query(NotificationEvent).filter(
                     NotificationEvent.monitoring_id == monitoring_id,
-                    NotificationEvent.status == 'sent'
+                    NotificationEvent.status == "sent",
                 ).order_by(NotificationEvent.sent_at.desc()).first()
-                if latest and latest.sent_at and now < latest.sent_at + timedelta(hours=settings.cooldown_hours):
+                last_sent_price = None
+                prices_since_last_sent = []
+                if latest is not None:
+                    previous = db.get(PriceHistory, latest.price_history_id)
+                    if previous is not None:
+                        last_sent_price = previous.price
+                    if latest.sent_at is not None:
+                        prices_since_last_sent = [row[0] for row in db.query(PriceHistory.price).filter(
+                            PriceHistory.product_id == product.id,
+                            PriceHistory.fetched_at > latest.sent_at,
+                            PriceHistory.id != history.id,
+                            PriceHistory.price.is_not(None),
+                        ).all()]
+                if not should_notify(result["price"], last_sent_price, prices_since_last_sent):
                     continue
                 event = NotificationEvent(monitoring_id=monitoring_id,
                                           price_history_id=history.id, status='pending')
@@ -111,6 +109,11 @@ def check_product(product_id: int, notifier: Notifier):
                     event.status = 'sent'
                     event.sent_at = datetime.utcnow()
                 db.commit()
+                if event.status == "sent":
+                    try:
+                        notifier.send(message)
+                    except OSError:
+                        logger.exception("Notification log write failed for monitoring %s", monitoring_id)
         except Exception as exc:
             db.rollback()
             product.last_error = str(exc)[:500]

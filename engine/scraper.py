@@ -169,12 +169,26 @@ class AddonScraper:
         headers = {**cfg.get("headers", {}), "User-Agent": "Price-Warner/0.1 (self-hosted price monitor)"}
         timeout = float(cfg.get("timeout", 15))
         self._last_request_at = time.monotonic()
-        response = self.client.request(
-            cfg.get("method", "GET").upper(), url, headers=headers,
-            timeout=timeout, follow_redirects=False,
-        )
-        response.raise_for_status()
-        return response
+        current_url = url
+        for _ in range(6):
+            response = self.client.request(
+                cfg.get("method", "GET").upper(), current_url, headers=headers,
+                timeout=timeout, follow_redirects=False,
+            )
+            if response.status_code not in (301, 302, 303, 307, 308):
+                response.raise_for_status()
+                return response
+            destination = response.headers.get("location")
+            if not destination:
+                raise ValueError("Redirect response has no Location header")
+            redirected_url = str(response.url.join(destination))
+            redirected = urlparse(redirected_url)
+            if (redirected.scheme != "https" or redirected.hostname != base.hostname or
+                    redirected.username or redirected.password or redirected.port):
+                raise ValueError("Redirect target must use the addon store's HTTPS hostname")
+            response.close()
+            current_url = redirected_url
+        raise ValueError("Too many HTTP redirects")
 
     def scrape(self, url: str) -> dict:
         """

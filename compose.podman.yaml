@@ -1,0 +1,5 @@
+services:
+  api:
+    userns_mode: keep-id
+  worker:
+    userns_mode: keep-id

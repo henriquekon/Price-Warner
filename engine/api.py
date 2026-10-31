@@ -39,6 +39,9 @@ def search_products(q: str = FastAPIQuery(..., min_length=1), db: Session = Depe
 
 @router.post("/products")
 def add_new_product(prod: ProductCreate, db: Session = Depends(get_db)):
+    if db.query(Product).filter(Product.url == prod.url).first():
+        raise HTTPException(status_code=409, detail="Product URL is already monitored")
+
     # Checks if the store exists before adding the product
     store = db.query(Store).filter(Store.id == prod.store_id).first()
     if not store:
@@ -157,7 +160,43 @@ def index_page():
         </div>
 
         <script>
-            // Executa a busca externa chamando a rota que criamos
+            let monitoredProductKeys = new Set();
+            const searchCards = [];
+
+            function escapeHTML(value) {
+                return String(value ?? '').replace(/[&<>"']/g, character => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                })[character]);
+            }
+
+            function productKey(url) {
+                try {
+                    const parsed = new URL(url, window.location.origin);
+                    const match = parsed.pathname.match(/^\\/produto\\/(\\d+)(?:\\/|$)/);
+                    if (match && parsed.hostname.endsWith('kabum.com.br')) {
+                        return `kabum:${match[1]}`;
+                    }
+                    return `${parsed.hostname}${parsed.pathname.replace(/\\/$/, '')}`;
+                } catch {
+                    return String(url || '').trim();
+                }
+            }
+
+            function setMonitorButtonState(button, monitored) {
+                button.disabled = monitored;
+                button.textContent = monitored ? 'Already monitoring' : 'Monitor this item';
+                button.className = monitored
+                    ? 'w-full bg-green-700 text-white font-semibold py-2 rounded-xl text-xs cursor-not-allowed'
+                    : 'w-full bg-gray-700 hover:bg-green-600 text-gray-300 font-semibold py-2 rounded-xl text-xs';
+            }
+
+            function refreshSearchButtons() {
+                searchCards.forEach(({button, url}) => {
+                    setMonitorButtonState(button, monitoredProductKeys.has(productKey(url)));
+                });
+            }
+
+            // Search external store products
             async function performSearch() {
                 const query = document.getElementById('search-input').value.trim();
                 if (query.length < 2) return alert('Digite pelo menos 2 caracteres.');
@@ -171,9 +210,11 @@ def index_page():
                 btn.disabled = true;
                 loader.classList.remove('hidden');
                 container.innerHTML = '';
+                searchCards.length = 0;
 
                 try {
                     const response = await fetch(`/products/search-external?q=${encodeURIComponent(query)}&store_id=kabum`);
+                    if (!response.ok) throw new Error(`Search failed (HTTP ${response.status})`);
                     const products = await response.json();
 
                     btn.disabled = false;
@@ -198,10 +239,10 @@ def index_page():
                         card.innerHTML = `
                             <div>
                                 <div class="bg-gray-900 rounded-xl p-2 flex items-center justify-center h-40 mb-4 overflow-hidden relative">
-                                    <img src="${imgUrl}" alt="Product image" class="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300">
+                                    <img src="${escapeHTML(imgUrl)}" alt="Product image" class="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300">
                                 </div>
-                                <h3 class="text-sm font-semibold text-gray-200 line-clamp-2 mb-2 min-h-[40px]" title="${prod.name}">
-                                    ${prod.name}
+                                <h3 class="text-sm font-semibold text-gray-200 line-clamp-2 mb-2 min-h-[40px]" title="${escapeHTML(prod.name)}">
+                                    ${escapeHTML(prod.name)}
                                 </h3>
                             </div>
                             <div class="mt-4">
@@ -213,6 +254,9 @@ def index_page():
                             </div>
                         `;
                         container.appendChild(card);
+                        const monitorButton = card.querySelector('button');
+                        searchCards.push({button: monitorButton, url: prod.url});
+                        setMonitorButtonState(monitorButton, monitoredProductKeys.has(productKey(prod.url)));
                     });
 
                 } catch (error) {
@@ -238,9 +282,9 @@ def index_page():
                 };
 
                 // Desativa botão para evitar cliques duplos
-                const originalText = buttonElement.innerHTML;
+                const originalText = buttonElement.textContent;
                 buttonElement.disabled = true;
-                buttonElement.innerHTML = "Adicionando...";
+                buttonElement.textContent = "Adding...";
 
                 try {
                     const response = await fetch('/products', {
@@ -249,23 +293,30 @@ def index_page():
                         body: JSON.stringify(payload)
                     });
 
-                    const result = await response.json();
+                    const raw = await response.text();
+                    let result = {};
+                    try { result = JSON.parse(raw); } catch { /* Non-JSON error response */ }
 
                     if (response.ok) {
-                        buttonElement.className = "w-full bg-green-600 text-white font-semibold py-2 rounded-xl text-xs transition-all pointer-events-none flex items-center justify-center gap-1";
-                        buttonElement.innerHTML = "✓ Monitorando";
+                        monitoredProductKeys.add(productKey(productData.url));
+                        refreshSearchButtons();
                         showToast();
                         loadMonitoredProducts(); // Recarrega o painel inferior automaticamente
                     } else {
-                        buttonElement.disabled = false;
-                        buttonElement.innerHTML = originalText;
-                        alert(`Erro da API: ${result.detail || 'Não foi possível adicionar.'}`);
+                        if (response.status === 409) {
+                            monitoredProductKeys.add(productKey(productData.url));
+                            refreshSearchButtons();
+                        } else {
+                            buttonElement.disabled = false;
+                            buttonElement.textContent = originalText;
+                        }
+                        alert(`Failed to monitor product (HTTP ${response.status}): ${result.detail || raw || 'Unknown error'}`);
                     }
                 } catch (error) {
                     buttonElement.disabled = false;
-                    buttonElement.innerHTML = originalText;
+                    buttonElement.textContent = originalText;
                     console.error(error);
-                    alert('Erro de rede ao tentar monitorar.');
+                    alert(`Failed to monitor product: ${error.message}`);
                 }
             }
 
@@ -276,8 +327,11 @@ def index_page():
                 
                 try {
                     const response = await fetch('/products');
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const products = await response.json();
-                    
+                    monitoredProductKeys = new Set(products.map(p => productKey(p.url)));
+                    refreshSearchButtons();
+
                     container.innerHTML = '';
                     if(products.length === 0) {
                         container.innerHTML = '<p class="text-gray-600 text-sm italic col-span-full">Nenhum produto cadastrado no banco ainda.</p>';
@@ -289,11 +343,11 @@ def index_page():
                         item.className = "bg-gray-800/40 border border-gray-800 rounded-xl p-3 flex items-center gap-3 text-xs";
                         item.innerHTML = `
                             <div class="w-10 h-10 bg-gray-900 rounded-lg p-1 shrink-0 flex items-center justify-center">
-                                <img src="${p.image_url || 'https://placehold.co/50'}" class="max-h-full max-w-full object-contain">
+                                <img src="${escapeHTML(p.image_url || 'https://placehold.co/50')}" class="max-h-full max-w-full object-contain">
                             </div>
                             <div class="overflow-hidden flex-1">
-                                <p class="font-medium text-gray-300 truncate" title="${p.name} Margem: ${p.target_drop_percentage}%">${p.name}</p>
-                                <p class="text-gray-500 text-[10px] mt-0.5 truncate">${p.url}</p>
+                                <p class="font-medium text-gray-300 truncate" title="${escapeHTML(p.name)} Margem: ${p.target_drop_percentage}%">${escapeHTML(p.name)}</p>
+                                <p class="text-gray-500 text-[10px] mt-0.5 truncate">${escapeHTML(p.url)}</p>
                             </div>
                             <span class="bg-gray-900 border border-gray-700 text-gray-400 px-2 py-1 rounded font-mono text-[10px]">
                                 i:${p.interval}m

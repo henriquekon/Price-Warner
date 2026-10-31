@@ -1,0 +1,16 @@
+.git
+.venv
+env
+__pycache__
+*.pyc
+.pytest_cache
+.env
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+notifications.log
+tests
+README*
+*.zip
+.streamlit

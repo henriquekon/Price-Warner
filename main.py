@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from data.models import init_db
 from engine.api import router as api_router
 from engine.core import price_scheduler
+from engine.config import RUN_SCHEDULER
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,15 +17,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    task = asyncio.create_task(price_scheduler())
+    task = asyncio.create_task(price_scheduler()) if RUN_SCHEDULER else None
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            logger.info("Price scheduler stopped")
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.info("Price scheduler stopped")
 
 
 app = FastAPI(title="Price-Warner Server", lifespan=lifespan)

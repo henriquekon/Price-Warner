@@ -1,0 +1,33 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${PRICE_WARNER_BIND:-127.0.0.1}:${PRICE_WARNER_PORT:-9873}:9873"
+    environment: &common_environment
+      DATABASE_URL: sqlite:////app/data/database.db
+      ADDONS_DIR: /app/addons
+      NOTIFICATION_LOG_PATH: /app/data/notifications.log
+      SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
+      RUN_SCHEDULER: "false"
+    volumes: &common_volumes
+      - ./data:/app/data
+      - ./addons:/app/addons:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9873/docs', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    build: .
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["python", "-m", "engine.worker"]
+    environment: *common_environment
+    volumes: *common_volumes
+    depends_on:
+      api:
+        condition: service_healthy

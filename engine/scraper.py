@@ -3,6 +3,7 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
+from engine.addons.registry import load_addon
 from urllib.parse import urlparse
 import time
 
@@ -138,8 +139,7 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 
 class AddonScraper:
     def __init__(self, addon_path: str):
-        with open(addon_path, "r", encoding="utf-8") as file:
-            self.addon = json.load(file)
+        self.addon = load_addon(addon_path)
         self.client = httpx.Client(http2=True)
         self._last_request_at = None
 

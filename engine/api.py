@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from engine.scraper import AddonScraper
+from engine.addons.registry import load_addon, discover_addons, resolve_addon, AddonValidationError
 from engine.config import ADDONS_DIR
 from engine.auth import current_user
 
@@ -55,6 +56,12 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: Us
     addon_path = ADDONS_DIR / f"{prod.store_id}.json"
     if not addon_path.is_file():
         raise HTTPException(400, "Unsupported store addon")
+    try:
+        store_id = resolve_addon(prod.url, ADDONS_DIR)
+    except AddonValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if store_id != prod.store_id:
+        raise HTTPException(400, "Product URL does not match the selected store")
     product = db.query(Product).filter(Product.url == prod.url).first()
     if product:
         monitored = db.query(Monitoring).filter(Monitoring.product_id == product.id, Monitoring.user_id == user.id).first()
@@ -87,6 +94,17 @@ def stop_monitoring(product_id: int, db: Session = Depends(get_db), user: User =
     db.delete(monitoring)
     db.commit()
     return {"message": "Monitoring removed"}
+
+
+@router.get("/stores")
+def list_stores(user: User = Depends(current_user)):
+    try:
+        addons = discover_addons(ADDONS_DIR)
+    except AddonValidationError as exc:
+        raise HTTPException(500, f"Invalid addon configuration: {exc}") from exc
+    return [{"id": key, "name": addon["store"]["name"],
+             "currency": addon["store"]["currency"],
+             "supports_search": "search" in addon} for key, addon in addons.items()]
 
 
 @router.get("/products/search-external")

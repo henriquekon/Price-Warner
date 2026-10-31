@@ -8,6 +8,12 @@ from bs4 import BeautifulSoup
 from engine.scraper import AddonScraper, run_strategies, transform_value
 
 
+def addon_definition():
+    return {"store": {"id": "example", "name": "Example", "base_url": "https://example.com", "currency": "BRL"},
+            "price": {"strategies": [{"name": "price", "type": "css", "selector": ".price"}]},
+            "product_name": {"strategies": [{"name": "name", "type": "css", "selector": "h1"}]}}
+
+
 @pytest.mark.parametrize("value,expected", [("1.299,90", 1299.90), ("1299.90", 1299.90), ("R$ 2.386,99", 2386.99)])
 def test_currency_conversion(value, expected):
     assert transform_value(value, "float") == expected
@@ -24,8 +30,8 @@ def test_strategy_fallback():
 
 
 def test_addon_request_configuration(tmp_path, monkeypatch):
-    config = {"store": {"id": "example", "name": "Example", "base_url": "https://example.com"},
-              "request": {"method": "GET", "headers": {"Accept": "text/html"}, "timeout": 7, "rate_limit_seconds": 0}}
+    config = addon_definition()
+    config["request"] = {"method": "GET", "headers": {"Accept": "text/html"}, "timeout": 7, "rate_limit_seconds": 0}
     path = tmp_path / "example.json"
     path.write_text(json.dumps(config))
     with AddonScraper(path) as scraper:
@@ -42,8 +48,8 @@ def test_addon_request_configuration(tmp_path, monkeypatch):
 
 
 def test_same_store_redirect_is_followed(tmp_path, monkeypatch):
-    config = {"store": {"id": "example", "name": "Example", "base_url": "https://example.com"},
-              "request": {"rate_limit_seconds": 0}}
+    config = addon_definition()
+    config["request"] = {"rate_limit_seconds": 0}
     path = tmp_path / "example.json"
     path.write_text(json.dumps(config))
     first = httpx.Response(301, headers={"location": "/product/slug"},
@@ -58,8 +64,8 @@ def test_same_store_redirect_is_followed(tmp_path, monkeypatch):
 
 
 def test_external_redirect_is_rejected(tmp_path, monkeypatch):
-    config = {"store": {"id": "example", "name": "Example", "base_url": "https://example.com"},
-              "request": {"rate_limit_seconds": 0}}
+    config = addon_definition()
+    config["request"] = {"rate_limit_seconds": 0}
     path = tmp_path / "example.json"
     path.write_text(json.dumps(config))
     redirect = httpx.Response(302, headers={"location": "http://127.0.0.1/private"},

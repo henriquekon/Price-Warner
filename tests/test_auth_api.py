@@ -47,7 +47,12 @@ def test_private_mode_isolates_monitorings(monkeypatch):
             import engine.api as api
             from unittest.mock import patch
             addon = Path(directory) / 'kabum.json'
-            addon.write_text('{}')
+            import json
+            addon.write_text(json.dumps({
+                "store": {"id": "kabum", "name": "KaBuM!", "base_url": "https://www.kabum.com.br", "currency": "BRL"},
+                "price": {"strategies": [{"name": "price", "type": "css", "selector": ".price"}]},
+                "product_name": {"strategies": [{"name": "name", "type": "css", "selector": "h1"}]}
+            }))
             with patch.object(api, 'ADDONS_DIR', Path(directory)):
                 result = a.post('/products', json=payload, headers={'X-CSRF-Token': token_a})
                 assert result.status_code == 201, result.text

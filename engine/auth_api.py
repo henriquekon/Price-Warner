@@ -77,3 +77,20 @@ def logout(request: Request, response: Response, user: User = Depends(current_us
         db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"message": "Logged out"}
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=12, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+@router.put('/password')
+def change_password(payload: PasswordChange, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if AUTH_MODE == 'local':
+        raise HTTPException(403, 'Password changes are unavailable in local mode')
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, 'Current password is incorrect')
+    if payload.current_password == payload.new_password:
+        raise HTTPException(400, 'New password must differ from current password')
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {'message': 'Password updated'}

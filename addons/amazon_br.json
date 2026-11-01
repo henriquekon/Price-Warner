@@ -1,0 +1,46 @@
+{
+  "_comment": "Amazon Brazil product parser. Requests may be refused; CAPTCHA is never bypassed.",
+  "store": {
+    "id": "amazon_br",
+    "name": "Amazon Brasil",
+    "base_url": "https://www.amazon.com.br",
+    "currency": "BRL"
+  },
+  "parser": "amazon_br",
+  "request": {
+    "method": "GET",
+    "headers": {
+      "Accept-Language": "pt-BR,pt;q=0.9"
+    },
+    "timeout": 20,
+    "rate_limit_seconds": 300
+  },
+  "price": {
+    "strategies": [
+      {
+        "name": "one_time_purchase",
+        "type": "css",
+        "selector": "#buybox .a-accordion-active .apex-pricetopay-value .a-offscreen",
+        "transform": "comma_decimal_to_float"
+      }
+    ]
+  },
+  "product_name": {
+    "strategies": [
+      {
+        "name": "product_title",
+        "type": "css",
+        "selector": "#productTitle"
+      }
+    ]
+  },
+  "availability": {
+    "strategies": [
+      {
+        "name": "availability",
+        "type": "css",
+        "selector": "#availability"
+      }
+    ]
+  }
+}

@@ -15,6 +15,22 @@ DEFAULT_ADDONS_DIR = Path(__file__).resolve().parent.parent / "addons"
 
 def inspect_html(addon, html, url):
     """Extract fields from supplied HTML without a network request or database write."""
+    if addon.get("parser") == "amazon_br":
+        from engine.addons.amazon_parser import parse_amazon_product
+        parsed = parse_amazon_product(html, url)
+        return {
+            "ok": parsed.status == "ok",
+            "status": parsed.status,
+            "reason": parsed.reason,
+            "url": parsed.url,
+            "store": addon["store"]["id"],
+            "currency": parsed.currency,
+            "price": float(parsed.price) if parsed.price else None,
+            "product_name": parsed.name,
+            "availability": parsed.availability,
+            "image_url": None,
+            "strategies_used": {"price": parsed.price_source},
+        }
     soup = BeautifulSoup(html, "html.parser")
     result = {
         "ok": False,

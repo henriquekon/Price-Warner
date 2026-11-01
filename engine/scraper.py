@@ -4,6 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from pathlib import Path
 from engine.addons.registry import load_addon
+from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
 from urllib.parse import urlparse
 import time
 
@@ -140,7 +141,7 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 class AddonScraper:
     def __init__(self, addon_path: str):
         self.addon = load_addon(addon_path)
-        self.client = httpx.Client(http2=True)
+        self.client = httpx.Client(http2=True, trust_env=False)
         self._last_request_at = None
 
     def __enter__(self):
@@ -166,7 +167,12 @@ class AddonScraper:
             if remaining > 0:
                 time.sleep(remaining)
 
-        headers = {**cfg.get("headers", {}), "User-Agent": "Price-Warner/0.1 (self-hosted price monitor)"}
+        headers = {
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
+            "User-Agent": "Price-Warner/0.2 (self-hosted price monitor)",
+            **cfg.get("headers", {}),
+        }
         timeout = float(cfg.get("timeout", 15))
         self._last_request_at = time.monotonic()
         current_url = url
@@ -195,8 +201,30 @@ class AddonScraper:
         Main method to scrape a product page and extract price, name, availability, etc.
         """
         print(f"\n[Scraper] Searching: {url}")
+        if self.addon.get("parser") == "amazon_br":
+            _, url = normalize_amazon_url(url)
         resp = self._make_request(url)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        return self.scrape_html(resp.text, url)
+
+    def scrape_html(self, html: str, url: str) -> dict:
+        """Extract product data from supplied HTML without network or persistence."""
+        if self.addon.get("parser") == "amazon_br":
+            parsed = parse_amazon_product(html, url)
+            return {
+                "ok": parsed.status == "ok",
+                "status": parsed.status,
+                "reason": parsed.reason,
+                "url": parsed.url,
+                "store": self.addon["store"]["id"],
+                "store_name": self.addon["store"]["name"],
+                "currency": parsed.currency,
+                "price": float(parsed.price) if parsed.price is not None else None,
+                "product_name": parsed.name,
+                "availability": parsed.availability,
+                "image_url": None,
+                "strategies_used": {"price": parsed.price_source},
+            }
+        soup = BeautifulSoup(html, "html.parser")
 
         result = {
             "url": url,
@@ -231,7 +259,8 @@ class AddonScraper:
             print(f"  Availability: {avail} (via '{strat}')")
 
         # Image
-        image, strat = run_strategies(soup, self.addon["product_image"]["strategies"])
+        image_cfg = self.addon.get("product_image")
+        image, strat = run_strategies(soup, image_cfg["strategies"]) if image_cfg else (None, None)
         result["image_url"] = image
 
         result["ok"] = result["price"] is not None

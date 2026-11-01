@@ -90,6 +90,9 @@ def validate_addon(addon):
             raise AddonValidationError(f"request.{field} must be numeric") from exc
         if not minimum <= value <= (120 if field == "timeout" else 86400):
             raise AddonValidationError(f"request.{field} is outside the allowed range")
+    parser = addon.get("parser")
+    if parser is not None and (parser != "amazon_br" or store_id != "amazon_br" or base_host != "www.amazon.com.br"):
+        raise AddonValidationError("Unsupported or mismatched addon parser")
     for section in ("price", "product_name"):
         _strategies(addon.get(section), section, SUPPORTED_TYPES)
     for section in ("availability", "product_image"):

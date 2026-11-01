@@ -30,7 +30,7 @@ def test_dashboard_exposes_user_specific_latest_price():
     app.dependency_overrides[current_user] = override_user
     try:
         with TestClient(app) as client:
-            response=client.get('/dashboard')
+            response=client.get('/dashboard?period=last')
         assert response.status_code == 200
         body=response.json()
         assert body['summary']['total']==1

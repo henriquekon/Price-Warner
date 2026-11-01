@@ -20,7 +20,7 @@ export default function Discover({stores,onCreated}:{stores:Store[];onCreated:()
   const [results,setResults] = useState<SearchItem[]>([]);
   const [preview,setPreview] = useState<Preview|null>(null);
   const [variantLoading,setVariantLoading] = useState(false);
-  const [interval,setInterval] = useState(30);
+  const [interval,setInterval] = useState(60);
   const [drop,setDrop] = useState(10);
   const [loading,setLoading] = useState(false);
   const [error,setError] = useState('');

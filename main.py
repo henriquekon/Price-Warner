@@ -15,6 +15,7 @@ from engine.auth_api import router as auth_router
 from engine.notifications_api import router as notifications_router
 from engine.dashboard_api import router as dashboard_router
 from engine.discovery_api import router as discovery_router
+from engine.product_details_api import router as product_details_router
 from engine.core import price_scheduler
 from engine.config import RUN_SCHEDULER
 
@@ -42,6 +43,7 @@ app.include_router(auth_router)
 app.include_router(notifications_router)
 app.include_router(dashboard_router)
 app.include_router(discovery_router)
+app.include_router(product_details_router)
 api_router.routes[:] = [route for route in api_router.routes if route.path != "/"]
 app.include_router(api_router)
 

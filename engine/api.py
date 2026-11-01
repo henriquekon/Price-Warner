@@ -19,7 +19,7 @@ class ProductCreate(BaseModel):
     name: str
     url: str
     store_id: str = Field(pattern=r"^[a-z0-9_-]+$")
-    interval: int = Field(default=30, ge=1, le=10080, description="Interval in minutes")
+    interval: int = Field(default=60, ge=1, le=10080, description="Interval in minutes")
     target_drop_percentage: float = Field(default=10.0, ge=0, le=100)
 
 # Dependency to get DB session

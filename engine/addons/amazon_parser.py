@@ -70,6 +70,7 @@ def _single_purchase_prices(soup: BeautifulSoup) -> tuple[set[Decimal], str | No
         "#buybox .a-accordion-active .apex-pricetopay-value .a-offscreen",
         "#buybox .a-accordion-active .a-price:not(.a-text-price) .a-offscreen",
         "#apex_offerDisplay_desktop #corePrice_feature_div .apex-pricetopay-value .a-offscreen",
+        "#buybox .a-price:not(.a-text-price) .a-offscreen",
     )
     for selector in selectors:
         prices: set[Decimal] = set()
@@ -153,12 +154,57 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
 
     variants = extract_amazon_variants(soup, asin)
     prices, source = _single_purchase_prices(soup)
+
     if len(prices) > 1:
-        return AmazonProductResult("ambiguous_price", asin, canonical, name, availability=availability,
-                                   reason="Conflicting one-time purchase prices", variants=variants)
-    if not prices:
-        return AmazonProductResult("price_unavailable", asin, canonical, name, availability=availability,
-                                   reason="Reliable one-time purchase price not found", variants=variants)
-    price = next(iter(prices))
-    return AmazonProductResult("ok", asin, canonical, name, f"{price:.2f}",
-                               availability=availability, price_source=source, variants=variants)
+        return AmazonProductResult(
+            "ambiguous_price",
+            asin,
+            canonical,
+            name,
+            availability=availability,
+            reason="Conflicting one-time purchase prices",
+        )
+
+    if len(prices) == 1:
+        price = next(iter(prices))
+    else:
+        price = None
+
+    if price is None:
+        variants = extract_amazon_variants(soup, asin)
+        selected = [
+            variant
+            for variant in variants
+            if variant.get("selected") is True
+            and variant.get("asin") == asin
+            and variant.get("display_price") is not None
+        ]
+
+        if len(selected) == 1:
+            try:
+                candidate = Decimal(str(selected[0]["display_price"]))
+                if candidate > 0:
+                    price = candidate
+                    source = "selected_variant_display_price"
+            except InvalidOperation:
+                pass
+
+    if price is None:
+        return AmazonProductResult(
+            "price_unavailable",
+            asin,
+            canonical,
+            name,
+            availability=availability,
+            reason="Reliable product price not found",
+        )
+
+    return AmazonProductResult(
+        "ok",
+        asin,
+        canonical,
+        name,
+        f"{price:.2f}",
+        availability=availability,
+        price_source=source,
+    )

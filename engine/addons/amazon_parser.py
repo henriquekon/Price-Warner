@@ -197,6 +197,7 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
             name,
             availability=availability,
             reason="Reliable product price not found",
+            variants=variants
         )
 
     return AmazonProductResult(
@@ -207,4 +208,5 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
         f"{price:.2f}",
         availability=availability,
         price_source=source,
+        variants=variants
     )

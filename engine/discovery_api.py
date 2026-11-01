@@ -44,4 +44,5 @@ def preview_product(
         "currency": result.get("currency", "BRL"),
         "store_id": store_id,
         "image_url": result.get("image_url"),
+        "variants": result.get("variants", []),
     }

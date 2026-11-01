@@ -3,7 +3,8 @@ import { CircleAlert, Link2, Plus, Search } from 'lucide-react';
 
 type Store = {id:string; name:string; currency:string; supports_search:boolean};
 type SearchItem = {name:string; url:string; price:number|null; image_url:string|null; store_id:string};
-type Preview = {ok:boolean; status:string; reason:string|null; name:string|null; url:string; price:number|null; currency:string; availability:string; store_id:string};
+type Variant = {asin:string;label:string;url:string;selected:boolean;display_price:string|null};
+type Preview = {variants?:Variant[];ok:boolean; status:string; reason:string|null; name:string|null; url:string; price:number|null; currency:string; availability:string; store_id:string};
 
 async function request<T>(path:string, init?:RequestInit):Promise<T> {
   const response = await fetch(path, {credentials:'same-origin',...init});
@@ -18,6 +19,7 @@ export default function Discover({stores,onCreated}:{stores:Store[];onCreated:()
   const [url,setUrl] = useState('');
   const [results,setResults] = useState<SearchItem[]>([]);
   const [preview,setPreview] = useState<Preview|null>(null);
+  const [variantLoading,setVariantLoading] = useState(false);
   const [interval,setInterval] = useState(30);
   const [drop,setDrop] = useState(10);
   const [loading,setLoading] = useState(false);
@@ -34,6 +36,21 @@ export default function Discover({stores,onCreated}:{stores:Store[];onCreated:()
     event.preventDefault();setLoading(true);setError('');setMessage('');setPreview(null);
     try {const params=new URLSearchParams({url:url.trim(),store_id:storeId});const data=await request<Preview>(`/products/preview?${params}`);setPreview(data);if(!data.ok)setError(data.reason||`Preview unavailable (${data.status})`);}
     catch(e){setError(e instanceof Error?e.message:'Preview failed');}finally{setLoading(false);}
+  };
+  const selectVariant = async (variant:Variant) => {
+    if (!preview || variant.url === preview.url) return;
+    setVariantLoading(true);setError('');setMessage('');
+    const previous = preview;
+    setPreview(null);
+    try {
+      const params = new URLSearchParams({url:variant.url,store_id:storeId});
+      const data = await request<Preview>(`/products/preview?${params}`);
+      setPreview(data);setUrl(variant.url);
+      if (!data.ok) setError(data.reason||`Preview unavailable (${data.status})`);
+    } catch(e) {
+      setPreview(previous);
+      setError(e instanceof Error?e.message:'Unable to load this edition');
+    } finally {setVariantLoading(false);}
   };
   const add = async (item:{name:string;url:string;store_id:string}) => {
     setLoading(true);setError('');setMessage('');
@@ -53,7 +70,7 @@ export default function Discover({stores,onCreated}:{stores:Store[];onCreated:()
       <div className="discovery-options"><label>Check interval (minutes)<input type="number" value={interval} min={1} max={10080} onChange={e=>setInterval(Number(e.target.value))}/></label><label>Target price drop (%)<input type="number" value={drop} min={0} max={100} step={0.5} onChange={e=>setDrop(Number(e.target.value))}/></label></div>
       {error && <div className="notice error"><CircleAlert size={16}/>{error}</div>}{message && <div className="notice">{message}</div>}
     </div>
-    {preview && <section className="discovery-results"><h2>Product preview</h2><article className="discovery-card"><div><h3>{preview.name||'Product unavailable'}</h3><strong>{money(preview.price)}</strong><p>{preview.availability} · {preview.status}</p></div><button className="primary" disabled={loading||!preview.ok||!preview.name} onClick={()=>preview.name && add({name:preview.name,url:preview.url,store_id:preview.store_id})}><Plus size={17}/>Monitor product</button></article></section>}
+    {preview && <section className="discovery-results"><h2>Product preview</h2><article className="discovery-card"><div><h3>{preview.name||'Product unavailable'}</h3><strong>{money(preview.price)}</strong><p>{preview.availability} · {preview.status}</p>{(preview.variants?.length ?? 0)>1 && <label className="discovery-label">Edition or format<select aria-label="Edition or format" value={preview.url} disabled={loading||variantLoading} onChange={e=>{const variant=preview.variants?.find(v=>v.url===e.target.value);if(variant) void selectVariant(variant);}}>{preview.variants?.map(v=><option key={v.asin} value={v.url}>{v.label}{v.selected?' (current)':''}</option>)}</select><small>Choosing a format loads its own product page and price before monitoring.</small></label>}</div><button className="primary" disabled={loading||variantLoading||!preview.ok||!preview.name} onClick={()=>preview.name && add({name:preview.name,url:preview.url,store_id:preview.store_id})}><Plus size={17}/>Monitor product</button></article></section>}
     {store?.supports_search && <section className="discovery-results"><h2>Search results <span className="count">{results.length}</span></h2><div className="discovery-grid">{results.map(item=><article className="discovery-card" key={item.url}><div className="discovery-result-info">{item.image_url && <img src={item.image_url} alt="" loading="lazy" referrerPolicy="no-referrer"/>}<div><h3>{item.name}</h3><strong>{money(item.price)}</strong><p><a href={item.url} rel="noopener noreferrer" target="_blank">View at store</a></p></div></div><button className="primary" disabled={loading||!item.url} onClick={()=>add(item)}><Plus size={17}/>Monitor product</button></article>)}</div></section>}
   </>;
 }

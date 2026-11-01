@@ -28,6 +28,7 @@ class AmazonProductResult:
     availability: str = "unknown"
     price_source: str | None = None
     reason: str | None = None
+    variants: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -85,6 +86,42 @@ def _single_purchase_prices(soup: BeautifulSoup) -> tuple[set[Decimal], str | No
     return set(), None
 
 
+def extract_amazon_variants(soup: BeautifulSoup, current_asin: str) -> tuple[dict, ...]:
+    """Extract book formats with independent Amazon Brazil product URLs."""
+    variants = []
+    seen = set()
+    for node in soup.select("#formats .swatchElement, #tmmSwatches .swatchElement"):
+        link = node.select_one("a")
+        label_node = node.select_one(".slot-title")
+        if link is None or label_node is None:
+            continue
+        label = label_node.get_text(" ", strip=True)
+        if not label:
+            continue
+        selected = "selected" in node.get("class", []) or link.get("aria-checked") == "true"
+        if selected:
+            asin = current_asin
+        else:
+            href = link.get("href", "")
+            match = _ASIN_PATH.search(href)
+            if not match:
+                continue
+            asin = match.group(1).upper()
+        if asin in seen or not _ASIN.fullmatch(asin):
+            continue
+        seen.add(asin)
+        price_node = node.select_one(".slot-price [aria-label]")
+        indicative_price = _parse_brl(price_node.get("aria-label")) if price_node else None
+        variants.append({
+            "asin": asin,
+            "label": label,
+            "url": f"https://www.amazon.com.br/dp/{asin}",
+            "selected": selected,
+            "display_price": str(indicative_price) if indicative_price is not None else None,
+        })
+    return tuple(variants) if len(variants) > 1 else ()
+
+
 def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
     """Parse previously acquired HTML, without fetching or saving anything."""
     asin, canonical = normalize_amazon_url(url)
@@ -114,13 +151,14 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
     else:
         availability = "unknown"
 
+    variants = extract_amazon_variants(soup, asin)
     prices, source = _single_purchase_prices(soup)
     if len(prices) > 1:
         return AmazonProductResult("ambiguous_price", asin, canonical, name, availability=availability,
-                                   reason="Conflicting one-time purchase prices")
+                                   reason="Conflicting one-time purchase prices", variants=variants)
     if not prices:
         return AmazonProductResult("price_unavailable", asin, canonical, name, availability=availability,
-                                   reason="Reliable one-time purchase price not found")
+                                   reason="Reliable one-time purchase price not found", variants=variants)
     price = next(iter(prices))
     return AmazonProductResult("ok", asin, canonical, name, f"{price:.2f}",
-                               availability=availability, price_source=source)
+                               availability=availability, price_source=source, variants=variants)

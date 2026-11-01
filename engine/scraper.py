@@ -223,6 +223,7 @@ class AddonScraper:
                 "availability": parsed.availability,
                 "image_url": None,
                 "strategies_used": {"price": parsed.price_source},
+                "variants": list(parsed.variants),
             }
         soup = BeautifulSoup(html, "html.parser")
 

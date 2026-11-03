@@ -8,10 +8,10 @@ from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
 from engine.email_service import send_email
-from engine.alert_rules import opportunity_reasons
+from engine.alert_rules import ADDITIONAL_DROP_PERCENT, cooldown_allows_alert, opportunity_reasons
 from engine.cycle_rules import evaluate_cycle, mark_delivered
 from engine.cycle_state import read_snapshot, write_snapshot
-from data.models import PriceCycleState
+from data.models import PriceCycleState, AlertMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,14 @@ def check_product(product_id: int, notifier: Notifier):
                                           monitoring.target_drop_percentage, now)
                 write_snapshot(state, decision.snapshot)
                 if decision.should_send:
-                    account_alerts.append((monitoring.id, monitoring.user_id, decision.reasons))
+                    kind = "first_drop" if state.last_alert_price is None else (
+                        "additional_drop" if result["price"] <= state.last_alert_price * (1 - ADDITIONAL_DROP_PERCENT / 100)
+                        else "recovery"
+                    )
+                    account_alerts.append((
+                        monitoring.id, monitoring.user_id, decision.reasons,
+                        decision.reference, state.last_alert_price, state.last_alert_at, kind,
+                    ))
             history = PriceHistory(
                 product_id=product.id,
                 price=result["price"],
@@ -94,12 +101,14 @@ def check_product(product_id: int, notifier: Notifier):
             product.last_error = None
             db.commit()
 
-            for monitoring_id, user_id, reasons in account_alerts:
+            for monitoring_id, user_id, reasons, reference, previous_price, previous_at, kind in account_alerts:
                 message = (f"OPPORTUNITY for account {user_id}: {product.name}\n"
                            f"Price: R$ {result['price']:.2f}\n"
                            f"Reason: {' | '.join(reasons)}\nLink: {product.url}")
                 settings = db.get(NotificationSettings, user_id)
                 if not settings or not settings.enabled:
+                    continue
+                if not cooldown_allows_alert(kind, previous_at, now, settings.cooldown_hours):
                     continue
                 state = db.get(PriceCycleState, monitoring_id)
                 if state is None:
@@ -107,6 +116,12 @@ def check_product(product_id: int, notifier: Notifier):
                 event = NotificationEvent(monitoring_id=monitoring_id,
                                           price_history_id=history.id, status='pending')
                 db.add(event)
+                db.flush()
+                db.add(AlertMetadata(
+                    event_id=event.id, reference_price=reference,
+                    previous_alert_price=previous_price,
+                    reason=" | ".join(reasons)[:500], kind=kind,
+                ))
                 db.commit()
                 try:
                     send_email(settings, settings.recipient_email,

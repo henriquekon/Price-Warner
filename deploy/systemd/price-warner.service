@@ -1,0 +1,16 @@
+[Unit]
+Description=Price-Warner containers (rootless Podman Compose)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/Price-Warner
+ExecStart=/usr/bin/env podman-compose -f compose.yaml -f compose.podman.yaml up -d
+ExecStop=/usr/bin/env podman-compose -f compose.yaml -f compose.podman.yaml down
+TimeoutStartSec=180
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

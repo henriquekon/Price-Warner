@@ -128,3 +128,14 @@ class PriceCycleState(Base):
     last_alert_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_alert_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     recovered_since_alert: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class AlertMetadata(Base):
+    """Optional per-event context and read state for the alert center."""
+    __tablename__ = "alert_metadata"
+    event_id: Mapped[int] = mapped_column(ForeignKey("notification_events.id"), primary_key=True)
+    reference_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    previous_alert_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

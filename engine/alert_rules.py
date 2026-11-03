@@ -1,4 +1,5 @@
 """Evaluate price opportunities independently of transport and persistence."""
+from datetime import datetime, timedelta
 from math import ceil, isfinite
 
 LOOKBACK_DAYS = 30
@@ -41,3 +42,10 @@ def should_notify(current_price: float, last_sent_price: float | None,
     recovered = any(price >= last_sent_price * (1 + RECOVERY_PERCENT / 100)
                     for price in prices_since_last_sent)
     return recovered and current_price <= last_sent_price
+
+
+def cooldown_allows_alert(kind: str, last_sent_at: datetime | None, now: datetime, cooldown_hours: int) -> bool:
+    """Apply cooldown to recovery alerts, not to meaningful further price drops."""
+    if kind != "recovery" or last_sent_at is None:
+        return True
+    return now >= last_sent_at + timedelta(hours=cooldown_hours)

@@ -76,6 +76,12 @@ def validate_addon(addon):
     _required_string(store, "name", "store")
     base_host = _hostname(_required_string(store, "base_url", "store"), "store.base_url")
     _required_string(store, "currency", "store")
+    image_hosts = store.get("image_hosts", [])
+    if not isinstance(image_hosts, list) or any(
+        not isinstance(host, str) or not re.fullmatch(r"[a-z0-9.-]+", host)
+        for host in image_hosts
+    ):
+        raise AddonValidationError("store.image_hosts must contain valid hostnames")
     request = addon.get("request", {})
     if not isinstance(request, dict):
         raise AddonValidationError("request must be an object")
@@ -107,6 +113,19 @@ def validate_addon(addon):
             raise AddonValidationError("search.url_template must contain one {query} placeholder")
         if _hostname(template.replace("{query}", "test"), "search.url_template") != base_host:
             raise AddonValidationError("search must use the store hostname")
+        pagination = search.get("pagination")
+        if pagination is not None:
+            if not isinstance(pagination, dict) or pagination.get("type") != "query":
+                raise AddonValidationError("search.pagination.type must be query")
+            page_param = _required_string(pagination, "page_param", "search.pagination")
+            size_param = _required_string(pagination, "page_size_param", "search.pagination")
+            if page_param == size_param or any(
+                not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]*", key)
+                for key in (page_param, size_param)
+            ):
+                raise AddonValidationError("Invalid search.pagination parameter names")
+            if pagination.get("start_page", 1) not in (0, 1):
+                raise AddonValidationError("search.pagination.start_page must be 0 or 1")
         _strategies(search, "search", SEARCH_TYPES)
     return addon
 

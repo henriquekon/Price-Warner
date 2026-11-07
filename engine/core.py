@@ -7,6 +7,8 @@ from data.models import PriceHistory, Product, SessionLocal, Monitoring, Notific
 from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
+from engine.addons.registry import load_addon
+from engine.media import validate_product_image_url
 from engine.email_service import send_email
 from engine.alert_rules import ADDITIONAL_DROP_PERCENT, cooldown_allows_alert, opportunity_reasons
 from engine.cycle_rules import evaluate_cycle, mark_delivered
@@ -42,6 +44,7 @@ def check_product(product_id: int, notifier: Notifier):
             return
 
         logger.info("Checking product %s", product.name)
+        result = {}
         try:
             addon_path = ADDONS_DIR / f"{product.store_id}.json"
             with AddonScraper(addon_path) as scraper:
@@ -97,6 +100,9 @@ def check_product(product_id: int, notifier: Notifier):
             )
             db.add(history)
             db.flush()
+            image_url = validate_product_image_url(result.get("image_url"), load_addon(addon_path))
+            if image_url:
+                product.image_url = image_url
             product.last_checked = now
             product.last_error = None
             db.commit()
@@ -143,6 +149,9 @@ def check_product(product_id: int, notifier: Notifier):
         except Exception as exc:
             db.rollback()
             product.last_error = str(exc)[:500]
+            image_url = validate_product_image_url(result.get("image_url"), load_addon(addon_path))
+            if image_url:
+                product.image_url = image_url
             product.last_checked = now
             db.commit()
             logger.exception("Failed checking product %s", product_id)

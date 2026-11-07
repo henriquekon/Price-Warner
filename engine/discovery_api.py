@@ -1,4 +1,5 @@
 """Preview a supported product before creating a monitoring record."""
+from engine.image_cache import image_proxy_url
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from data.models import User
@@ -44,5 +45,6 @@ def preview_product(
         "currency": result.get("currency", "BRL"),
         "store_id": store_id,
         "image_url": result.get("image_url"),
+        "image_proxy_url": image_proxy_url(result.get("image_url"), store_id),
         "variants": result.get("variants", []),
     }

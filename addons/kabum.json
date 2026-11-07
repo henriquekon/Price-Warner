@@ -4,9 +4,12 @@
     "id": "kabum",
     "name": "KaBuM!",
     "base_url": "https://www.kabum.com.br",
-    "currency": "BRL"
+    "currency": "BRL",
+    "image_hosts": [
+      "images.kabum.com.br",
+      "www.kabum.com.br"
+    ]
   },
-
   "request": {
     "method": "GET",
     "headers": {
@@ -17,28 +20,26 @@
     "timeout": 15,
     "rate_limit_seconds": 300
   },
-
   "price": {
     "strategies": [
-    {
+      {
         "name": "schema_org_json",
         "description": "Extracts price from Schema.org JSON-LD",
         "type": "json_in_script",
         "selector": "script[type='application/ld+json']",
         "json_path": "offers.price",
         "transform": "float"
-    },
-    {
+      },
+      {
         "name": "css_selector",
         "description": "Fallback via seletor CSS direto no HTML",
         "type": "css",
         "selector": "h4.text-4xl",
         "regex": "[\\d.,]+",
         "transform": "comma_decimal_to_float"
-    }
+      }
     ]
   },
-
   "search": {
     "url_template": "https://www.kabum.com.br/busca/{query}",
     "strategies": [
@@ -56,40 +57,44 @@
           "image_prefix": "https://images.kabum.com.br/produtos/fotos/g/"
         }
       }
-    ]
+    ],
+    "pagination": {
+      "type": "query",
+      "page_param": "page_number",
+      "page_size_param": "page_size",
+      "start_page": 1
+    }
   },
-
   "product_name": {
     "strategies": [
-    {
+      {
         "name": "schema_org_json",
         "type": "json_in_script",
         "selector": "script[type='application/ld+json']",
         "json_path": "name"
-    },
-    {
+      },
+      {
         "name": "meta_og_title",
         "type": "meta",
         "attribute": "property",
         "value": "og:title",
         "extract": "content"
-    }
+      }
     ]
   },
-
   "availability": {
     "strategies": [
-    {
-      "name": "schema_org_availability",
-      "type": "json_in_script",
-      "selector": "script[type='application/ld+json']",
-      "json_path": "offers.availability",
-      "map": {
-        "https://schema.org/InStock": "in_stock",
-        "https://schema.org/OutOfStock": "out_of_stock"
-      }
-    },
-    {
+      {
+        "name": "schema_org_availability",
+        "type": "json_in_script",
+        "selector": "script[type='application/ld+json']",
+        "json_path": "offers.availability",
+        "map": {
+          "https://schema.org/InStock": "in_stock",
+          "https://schema.org/OutOfStock": "out_of_stock"
+        }
+      },
+      {
         "name": "in_stock_text",
         "description": "Checks if the text 'Em estoque' is present on the page",
         "type": "css_exists",
@@ -97,10 +102,9 @@
         "contains_text": "Em estoque",
         "true_value": "in_stock",
         "false_value": "out_of_stock"
-    }
+      }
     ]
   },
-
   "product_image": {
     "strategies": [
       {
@@ -108,6 +112,13 @@
         "type": "json_in_script",
         "selector": "script[type='application/ld+json']",
         "json_path": "image"
+      },
+      {
+        "name": "og_image",
+        "type": "meta",
+        "attribute": "property",
+        "value": "og:image",
+        "extract": "content"
       }
     ]
   }

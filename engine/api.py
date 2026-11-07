@@ -3,7 +3,7 @@ import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, Query as FastAPIQuery
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from data.models import SessionLocal, Product, Store, Monitoring, User
+from data.models import SessionLocal, Product, Store, Monitoring, User, PriceCycleState, NotificationEvent, AlertMetadata
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
@@ -11,6 +11,8 @@ from engine.scraper import AddonScraper
 from engine.addons.registry import load_addon, discover_addons, resolve_addon, AddonValidationError
 from engine.config import ADDONS_DIR
 from engine.auth import current_user
+from engine.media import validate_product_image_url
+from engine.image_cache import image_proxy_url
 
 router = APIRouter()
 
@@ -21,6 +23,7 @@ class ProductCreate(BaseModel):
     store_id: str = Field(pattern=r"^[a-z0-9_-]+$")
     interval: int = Field(default=60, ge=1, le=10080, description="Interval in minutes")
     target_drop_percentage: float = Field(default=10.0, ge=0, le=100)
+    image_url: Optional[str] = Field(default=None, max_length=2048)
 
 # Dependency to get DB session
 def get_db():
@@ -38,6 +41,7 @@ def get_all_products(db: Session = Depends(get_db), user: User = Depends(current
 
 def product_response(product: Product, monitoring: Monitoring):
     return {"id": product.id, "name": product.name, "url": product.url, "image_url": product.image_url,
+            "image_proxy_url": image_proxy_url(product.image_url, product.store_id),
             "store_id": product.store_id, "interval": monitoring.interval,
             "target_drop_percentage": monitoring.target_drop_percentage,
             "is_active": monitoring.is_active, "last_checked": product.last_checked,
@@ -62,8 +66,14 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: Us
         raise HTTPException(400, str(exc)) from exc
     if store_id != prod.store_id:
         raise HTTPException(400, "Product URL does not match the selected store")
+    addon = load_addon(addon_path)
+    image_url = validate_product_image_url(prod.image_url, addon) if prod.image_url else None
+    if prod.image_url and image_url is None:
+        raise HTTPException(400, "Unsupported product image URL")
     product = db.query(Product).filter(Product.url == prod.url).first()
     if product:
+        if not product.image_url and image_url:
+            product.image_url = image_url
         monitored = db.query(Monitoring).filter(Monitoring.product_id == product.id, Monitoring.user_id == user.id).first()
         if monitored:
             raise HTTPException(409, "Product is already monitored by this account")
@@ -73,7 +83,8 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: Us
             db.add(Store(id=prod.store_id, name=prod.store_id.capitalize(), is_active=True))
             db.flush()
         product = Product(name=prod.name, url=prod.url, store_id=prod.store_id,
-                          interval=prod.interval, target_drop_percentage=prod.target_drop_percentage)
+                          interval=prod.interval, target_drop_percentage=prod.target_drop_percentage,
+                          image_url=image_url)
         db.add(product)
         db.flush()
     db.add(Monitoring(user_id=user.id, product_id=product.id,
@@ -91,9 +102,23 @@ def stop_monitoring(product_id: int, db: Session = Depends(get_db), user: User =
     monitoring = db.query(Monitoring).filter(Monitoring.user_id == user.id, Monitoring.product_id == product_id).first()
     if not monitoring:
         raise HTTPException(404, "Monitoring not found")
+    event_ids = [row[0] for row in db.query(NotificationEvent.id).filter(
+        NotificationEvent.monitoring_id == monitoring.id).all()]
+    if event_ids:
+        db.query(AlertMetadata).filter(AlertMetadata.event_id.in_(event_ids)).delete(synchronize_session=False)
+        db.query(NotificationEvent).filter(NotificationEvent.id.in_(event_ids)).delete(synchronize_session=False)
+    db.query(PriceCycleState).filter(PriceCycleState.monitoring_id == monitoring.id).delete(synchronize_session=False)
     db.delete(monitoring)
+    db.flush()
+    remaining = db.query(Monitoring.id).filter(Monitoring.product_id == product_id).first()
+    deleted_product = remaining is None
+    if deleted_product:
+        # Delete shared history only after the last user stops monitoring.
+        from data.models import PriceHistory
+        db.query(PriceHistory).filter(PriceHistory.product_id == product_id).delete(synchronize_session=False)
+        db.query(Product).filter(Product.id == product_id).delete(synchronize_session=False)
     db.commit()
-    return {"message": "Monitoring removed"}
+    return {"message": "Monitoring removed", "product_deleted": deleted_product}
 
 
 @router.get("/stores")
@@ -104,7 +129,8 @@ def list_stores(user: User = Depends(current_user)):
         raise HTTPException(500, f"Invalid addon configuration: {exc}") from exc
     return [{"id": key, "name": addon["store"]["name"],
              "currency": addon["store"]["currency"],
-             "supports_search": "search" in addon} for key, addon in addons.items()]
+             "supports_search": "search" in addon,
+             "supports_search_pagination": bool(addon.get("search", {}).get("pagination"))} for key, addon in addons.items()]
 
 
 @router.get("/products/search-external")
@@ -122,11 +148,36 @@ def search_external_store(
         
     with AddonScraper(addon_path) as scraper:
         results = scraper.search_external(q)
+    for item in results:
+        item["image_proxy_url"] = image_proxy_url(item.get("image_url"), store_id)
 
     print(f"[DEBUG API] Returned: {len(results)}")
     print(f"[DEBUG API] Data returned: {results}\n")
     
     return results
+
+@router.get("/products/search-external-paged")
+def search_external_store_paged(
+    q: str = FastAPIQuery(..., min_length=2),
+    store_id: str = FastAPIQuery(default="kabum", pattern=r"^[a-z0-9_-]+$"),
+    page: int = FastAPIQuery(1, ge=1, le=1000),
+    page_size: int = FastAPIQuery(20, ge=5, le=100),
+    user: User = Depends(current_user),
+):
+    addon_path = ADDONS_DIR / f"{store_id}.json"
+    if not addon_path.is_file():
+        raise HTTPException(404, "Store addon not found")
+    addon = load_addon(addon_path)
+    if "search" not in addon:
+        raise HTTPException(400, "Store does not support name search")
+    if page > 1 and not addon["search"].get("pagination"):
+        raise HTTPException(400, "Store addon does not support search pagination")
+    with AddonScraper(str(addon_path)) as scraper:
+        result = scraper.search_external_page(q, page=page, page_size=page_size)
+    for item in result["items"]:
+        item["image_proxy_url"] = image_proxy_url(item.get("image_url"), store_id)
+    return result
+
 
 @router.get("/", response_class=HTMLResponse)
 def index_page():

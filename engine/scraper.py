@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 from engine.addons.registry import load_addon
 from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
+from engine.media import validate_product_image_url
 from urllib.parse import urlparse
 import time
 
@@ -133,7 +134,7 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
             print(f"[WARN] Strategy '{strategy['name']}' failed with error: {e}")
             result = None
 
-        if result is not None:
+        if result is not None and result != [] and result != "":
             return result, strategy["name"]
 
     return None, None
@@ -262,127 +263,117 @@ class AddonScraper:
         # Image
         image_cfg = self.addon.get("product_image")
         image, strat = run_strategies(soup, image_cfg["strategies"]) if image_cfg else (None, None)
-        result["image_url"] = image
+        result["image_url"] = validate_product_image_url(image, self.addon)
 
         result["ok"] = result["price"] is not None
         return result
     
     def search_external(self, query: str) -> list:
-        """
-        Searches the store externally by parsing HTML elements or embedded 
-        JSON structures dynamically defined in the store's addon configuration.
-        """
+        """Legacy search response kept for existing CLI/API callers."""
+        return self.search_external_page(query)["items"]
+
+    def search_external_page(self, query: str, page: int = 1, page_size: int = 20) -> dict:
+        """Fetch one store-defined search page and return pagination metadata."""
+        from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+        from engine.media import validate_product_image_url
+
+        if not 1 <= page <= 1000 or not 5 <= page_size <= 100:
+            raise ValueError("Invalid search pagination")
         search_cfg = self.addon.get("search")
         if not search_cfg:
-            print(f"[WARN] Store '{self.addon['store']['id']}' does not support external search.")
-            return []
+            return {"items": [], "page": page, "page_size": page_size,
+                    "has_next": False, "total": None}
+        pagination = search_cfg.get("pagination")
+        if not pagination and page > 1:
+            raise ValueError("Search pagination not supported by this store")
+        url = search_cfg["url_template"].format(query=quote(query, safe=""))
+        if pagination:
+            parsed = urlsplit(url)
+            params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            params[pagination["page_param"]] = str(page - 1 + pagination.get("start_page", 1))
+            params[pagination["page_size_param"]] = str(page_size)
+            url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                              urlencode(params), parsed.fragment))
+        resp = self._make_request(url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        products_found = []
 
-        import urllib.parse
-        
-        query_encoded = urllib.parse.quote(query)
-        url = search_cfg["url_template"].format(query=query_encoded)
-        
-        try:
-            resp = self._make_request(url)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            products_found = []
-
-            for strategy in search_cfg["strategies"]:
-                stype = strategy.get("type")
-                
-                if stype == "json_catalog":
-                    tag = soup.select_one(strategy["selector"])
-                    if not tag:
+        for strategy in search_cfg["strategies"]:
+            mapping = strategy["mapping"]
+            if strategy["type"] == "json_catalog":
+                tag = soup.select_one(strategy["selector"])
+                if not tag:
+                    continue
+                try:
+                    data = json.loads(tag.string)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for key in strategy["root_json_path"].split("."):
+                    if not isinstance(data, dict):
+                        data = None
+                        break
+                    data = data.get(key)
+                if not isinstance(data, list):
+                    continue
+                for item in data[:page_size]:
+                    if not isinstance(item, dict):
                         continue
-                        
+                    raw_url = item.get(mapping["url_key"])
+                    if raw_url is None or str(raw_url) == "":
+                        continue
+                    raw_image = item.get(mapping["image_key"])
+                    image_url = None
+                    if raw_image:
+                        text_image = str(raw_image)
+                        candidate = (text_image if text_image.startswith("https://")
+                                     else f"{mapping.get('image_prefix', '')}{text_image}")
+                        image_url = validate_product_image_url(candidate, self.addon)
+                    raw_price = item.get(mapping["price_key"])
                     try:
-                        catalog_data = json.loads(tag.string)
-                    except (json.JSONDecodeError, TypeError):
+                        price = float(raw_price) if raw_price is not None else None
+                    except (TypeError, ValueError):
+                        price = None
+                    url_value = str(raw_url)
+                    product_url = (url_value if url_value.startswith("https://")
+                                   else f"{mapping.get('url_prefix', '')}{url_value}")
+                    products_found.append({
+                        "name": str(item.get(mapping["name_key"], "Unnamed product")),
+                        "url": product_url, "price": price, "image_url": image_url,
+                        "store_id": self.addon["store"]["id"],
+                    })
+            elif strategy["type"] == "html_cards":
+                for card in soup.select(strategy["card_selector"])[:page_size]:
+                    aria_info = card.get(mapping["name_source"], "")
+                    raw_url = card.get(mapping["url_source"], "")
+                    if not aria_info or not raw_url:
                         continue
-                        
-                    keys = strategy["root_json_path"].split(".")
-                    for key in keys:
-                        if isinstance(catalog_data, dict):
-                            catalog_data = catalog_data.get(key, {})
-                            
-                    if not isinstance(catalog_data, list):
-                        continue
-                        
-                    mapping = strategy["mapping"]
-                    
-                    for item in catalog_data[:12]:
-                        if not isinstance(item, dict):
-                            continue
-                            
-                        raw_name = item.get(mapping["name_key"], "Sem nome")
-                        raw_url_node = item.get(mapping["url_key"], "")
-                        raw_price = item.get(mapping["price_key"])
-                        raw_image = item.get(mapping["image_key"], "")
-                        
-                        full_url = f"{mapping.get('url_prefix', '')}{raw_url_node}" if raw_url_node else ""
-                        full_image = f"{mapping.get('image_prefix', '')}{raw_image}" if raw_image else None
-                        
+                    full_url = (raw_url if raw_url.startswith("https://")
+                                else f"{mapping.get('url_prefix', '')}{raw_url}")
+                    img_tag = card.select_one(mapping["image_selector"])
+                    raw_image = img_tag.get(mapping["image_source"]) if img_tag else None
+                    image_url = None
+                    if raw_image:
+                        candidate = (raw_image if raw_image.startswith("https://")
+                                     else f"{mapping.get('image_prefix', '')}{raw_image}")
+                        image_url = validate_product_image_url(candidate, self.addon)
+                    match = re.search(mapping["price_regex"], aria_info)
+                    price = None
+                    name = aria_info
+                    if match:
+                        name = aria_info.split(match.group(0))[0].strip().rstrip(",")
                         try:
-                            price_value = float(raw_price) if raw_price is not None else None
-                        except ValueError:
-                            price_value = None
-
-                        products_found.append({
-                            "name": raw_name,
-                            "url": full_url,
-                            "price": price_value,
-                            "image_url": full_image,
-                            "store_id": self.addon["store"]["id"]
-                        })
-                        
-                    if products_found:
-                        return products_found
-
-                elif stype == "html_cards":
-                    cards = soup.select(strategy["card_selector"])
-                    if not cards:
-                        continue
-                        
-                    mapping = strategy["mapping"]
-                    for card in cards[:12]:
-                        aria_info = card.get(mapping["name_source"], "")
-                        if not aria_info:
-                            continue
-                            
-                        raw_url = card.get(mapping["url_source"], "")
-                        prefix = mapping.get("url_prefix", "")
-                        full_url = raw_url if raw_url.startswith("http") else f"{prefix}{raw_url}"
-                        
-                        img_tag = card.select_one(mapping["image_selector"])
-                        image_url = img_tag.get(mapping["image_source"]) if img_tag else None
-                        
-                        price_match = re.search(mapping["price_regex"], aria_info)
-                        price_value = None
-                        name_value = aria_info
-                        
-                        if price_match:
-                            raw_price = price_match.group(1)
-                            name_value = aria_info.split(price_match.group(0))[0].strip().rstrip(",")
-                            try:
-                                if "," in raw_price:
-                                    raw_price = raw_price.replace(".", "").replace(",", ".")
-                                price_value = float(raw_price)
-                            except ValueError:
-                                price_value = None
-
-                        products_found.append({
-                            "name": name_value,
-                            "url": full_url,
-                            "price": price_value,
-                            "image_url": image_url,
-                            "store_id": self.addon["store"]["id"]
-                        })
-                        
-                    if products_found:
-                        return products_found
-                        
-            return products_found
-
-        except Exception as e:
-            print(f"[ERROR] Failed to perform robust external search: {e}")
-            return []
+                            text_price = match.group(1)
+                            if "," in text_price:
+                                text_price = text_price.replace(".", "").replace(",", ".")
+                            price = float(text_price)
+                        except (ValueError, IndexError):
+                            pass
+                    products_found.append({"name": name, "url": full_url, "price": price,
+                                           "image_url": image_url,
+                                           "store_id": self.addon["store"]["id"]})
+            if products_found:
+                break
+        return {"items": products_found[:page_size], "page": page,
+                "page_size": page_size,
+                "has_next": bool(pagination and len(products_found) >= page_size),
+                "total": None}

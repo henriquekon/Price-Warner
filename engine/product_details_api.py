@@ -1,4 +1,5 @@
 """Authenticated product history and per-user monitoring settings."""
+from engine.image_cache import image_proxy_url
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -36,6 +37,7 @@ def product_details(product_id: int, db: Session = Depends(get_db), user: User =
         "url": product.url,
         "store_id": product.store_id,
         "image_url": product.image_url,
+        "image_proxy_url": image_proxy_url(product.image_url, product.store_id),
         "last_checked": product.last_checked,
         "last_error": product.last_error,
         "interval": monitoring.interval,

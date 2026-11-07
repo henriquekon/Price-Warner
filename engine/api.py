@@ -1,4 +1,5 @@
 import os
+import httpx
 import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, Query as FastAPIQuery
 from fastapi.responses import HTMLResponse
@@ -172,8 +173,11 @@ def search_external_store_paged(
         raise HTTPException(400, "Store does not support name search")
     if page > 1 and not addon["search"].get("pagination"):
         raise HTTPException(400, "Store addon does not support search pagination")
-    with AddonScraper(str(addon_path)) as scraper:
-        result = scraper.search_external_page(q, page=page, page_size=page_size)
+    try:
+        with AddonScraper(str(addon_path)) as scraper:
+            result = scraper.search_external_page(q, page=page, page_size=page_size)
+    except (ValueError, OSError, httpx.HTTPError) as exc:
+        raise HTTPException(502, "Store search could not be completed; the store may be unavailable or require verification") from exc
     for item in result["items"]:
         item["image_proxy_url"] = image_proxy_url(item.get("image_url"), store_id)
     return result

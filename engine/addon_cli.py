@@ -17,9 +17,10 @@ def inspect_html(addon, html, url):
     """Extract fields from supplied HTML without a network request or database write."""
     if addon.get("parser") == "amazon_br":
         from engine.addons.amazon_parser import parse_amazon_product
+        from engine.media import validate_product_image_url
         parsed = parse_amazon_product(html, url)
         return {
-            "ok": parsed.status == "ok",
+            "ok": parsed.status in ("ok", "out_of_stock"),
             "status": parsed.status,
             "reason": parsed.reason,
             "url": parsed.url,
@@ -28,7 +29,7 @@ def inspect_html(addon, html, url):
             "price": float(parsed.price) if parsed.price else None,
             "product_name": parsed.name,
             "availability": parsed.availability,
-            "image_url": None,
+            "image_url": validate_product_image_url(parsed.image_url, addon),
             "strategies_used": {"price": parsed.price_source},
         }
     soup = BeautifulSoup(html, "html.parser")

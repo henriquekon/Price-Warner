@@ -115,15 +115,23 @@ def validate_addon(addon):
             raise AddonValidationError("search must use the store hostname")
         pagination = search.get("pagination")
         if pagination is not None:
-            if not isinstance(pagination, dict) or pagination.get("type") != "query":
-                raise AddonValidationError("search.pagination.type must be query")
+            if not isinstance(pagination, dict) or pagination.get("type") not in ("query", "query_cursor"):
+                raise AddonValidationError("search.pagination.type must be query or query_cursor")
             page_param = _required_string(pagination, "page_param", "search.pagination")
-            size_param = _required_string(pagination, "page_size_param", "search.pagination")
-            if page_param == size_param or any(
+            size_param = (_required_string(pagination, "page_size_param", "search.pagination")
+                          if pagination["type"] == "query" else None)
+            if (page_param == size_param or any(
                 not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]*", key)
-                for key in (page_param, size_param)
-            ):
+                for key in (page_param, size_param) if key is not None
+            )):
                 raise AddonValidationError("Invalid search.pagination parameter names")
+            if pagination["type"] == "query_cursor":
+                _required_string(pagination, "next_selector", "search.pagination")
+                for field, minimum, maximum in (("cache_seconds", 1, 3600),
+                                                ("request_spacing_seconds", 1, 120)):
+                    value = pagination.get(field, minimum)
+                    if not isinstance(value, (int, float)) or not minimum <= value <= maximum:
+                        raise AddonValidationError(f"Invalid search.pagination.{field}")
             if pagination.get("start_page", 1) not in (0, 1):
                 raise AddonValidationError("search.pagination.start_page must be 0 or 1")
         _strategies(search, "search", SEARCH_TYPES)

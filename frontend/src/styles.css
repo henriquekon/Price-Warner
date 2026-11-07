@@ -20,3 +20,7 @@
 
 .product-thumb {position:relative}
 .product-thumb img {position:absolute;inset:0;background:#f5f6f1}
+
+.state-oos{color:#ffcf8a}.state-oos>span{background:#e6ad63}
+
+.price-cell small{display:block;margin-top:4px;font-weight:400}

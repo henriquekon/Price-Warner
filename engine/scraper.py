@@ -7,6 +7,7 @@ from engine.addons.registry import load_addon
 from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
 from engine.media import validate_product_image_url
 from urllib.parse import urlparse
+from threading import Lock
 import time
 
 # Value Transformations
@@ -139,6 +140,11 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 
     return None, None
 
+# Keep only a small number of recent, public search-result snapshots in memory.
+_SEARCH_SNAPSHOTS = {}
+_SEARCH_SNAPSHOTS_LOCK = Lock()
+
+
 class AddonScraper:
     def __init__(self, addon_path: str):
         self.addon = load_addon(addon_path)
@@ -154,7 +160,7 @@ class AddonScraper:
     def close(self):
         self.client.close()
 
-    def _make_request(self, url: str) -> httpx.Response:
+    def _make_request(self, url: str, *, rate_limit_seconds: float | None = None) -> httpx.Response:
         cfg = self.addon.get("request", {})
         base = urlparse(self.addon["store"]["base_url"])
         requested = urlparse(url)
@@ -162,7 +168,8 @@ class AddonScraper:
                 requested.username or requested.password or requested.port):
             raise ValueError("Request URL must use the addon store's HTTPS hostname")
 
-        limit = max(0.0, float(cfg.get("rate_limit_seconds", 0)))
+        limit = max(0.0, float(cfg.get("rate_limit_seconds", 0) if rate_limit_seconds is None
+                               else rate_limit_seconds))
         if self._last_request_at is not None:
             remaining = limit - (time.monotonic() - self._last_request_at)
             if remaining > 0:
@@ -212,7 +219,7 @@ class AddonScraper:
         if self.addon.get("parser") == "amazon_br":
             parsed = parse_amazon_product(html, url)
             return {
-                "ok": parsed.status == "ok",
+                "ok": parsed.status in ("ok", "out_of_stock"),
                 "status": parsed.status,
                 "reason": parsed.reason,
                 "url": parsed.url,
@@ -222,7 +229,7 @@ class AddonScraper:
                 "price": float(parsed.price) if parsed.price is not None else None,
                 "product_name": parsed.name,
                 "availability": parsed.availability,
-                "image_url": None,
+                "image_url": validate_product_image_url(parsed.image_url, self.addon),
                 "strategies_used": {"price": parsed.price_source},
                 "variants": list(parsed.variants),
             }
@@ -284,6 +291,8 @@ class AddonScraper:
             return {"items": [], "page": page, "page_size": page_size,
                     "has_next": False, "total": None}
         pagination = search_cfg.get("pagination")
+        if pagination and pagination["type"] == "query_cursor":
+            return self._search_cursor_pages(query, page, page_size, search_cfg)
         if not pagination and page > 1:
             raise ValueError("Search pagination not supported by this store")
         url = search_cfg["url_template"].format(query=quote(query, safe=""))
@@ -342,6 +351,9 @@ class AddonScraper:
                         "store_id": self.addon["store"]["id"],
                     })
             elif strategy["type"] == "html_cards":
+                if "name_selector" in mapping:
+                    products_found.extend(self._extract_css_search_cards(soup, strategy))
+                    continue
                 for card in soup.select(strategy["card_selector"])[:page_size]:
                     aria_info = card.get(mapping["name_source"], "")
                     raw_url = card.get(mapping["url_source"], "")
@@ -377,3 +389,96 @@ class AddonScraper:
                 "page_size": page_size,
                 "has_next": bool(pagination and len(products_found) >= page_size),
                 "total": None}
+
+    def _extract_css_search_cards(self, soup: BeautifulSoup, strategy: dict) -> list[dict]:
+        """Extract public search cards according to an addon-defined CSS mapping."""
+        mapping = strategy["mapping"]
+        found = []
+        for card in soup.select(strategy["card_selector"]):
+            value = card.get(mapping["url_source"], "")
+            if not isinstance(value, str) or not value:
+                continue
+            if mapping.get("asin_pattern") and not re.fullmatch(mapping["asin_pattern"], value):
+                continue
+            title = card.select_one(mapping["name_selector"])
+            if title is None:
+                continue
+            name = title.get_text(" ", strip=True)
+            if not name:
+                continue
+            product_url = value if value.startswith("https://") else mapping.get("url_prefix", "") + value
+            image = card.select_one(mapping["image_selector"])
+            raw_image = image.get(mapping.get("image_source", "src")) if image else None
+            image_url = validate_product_image_url(raw_image, self.addon)
+            price_node = card.select_one(mapping["price_selector"])
+            price = None
+            if price_node is not None:
+                try:
+                    candidate = transform_value(price_node.get_text(" ", strip=True), "comma_decimal_to_float")
+                    if candidate > 0:
+                        price = candidate
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            found.append({"name": name, "url": product_url, "price": price,
+                          "image_url": image_url, "store_id": self.addon["store"]["id"]})
+        return found
+
+    def _search_cursor_pages(self, query: str, page: int, page_size: int, search_cfg: dict) -> dict:
+        """Snapshot variable-length store pages so UI pagination neither skips nor repeats cards."""
+        from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+
+        cfg = search_cfg["pagination"]
+        start, end = (page - 1) * page_size, page * page_size
+        key = (self.addon["store"]["id"], query.strip())
+        ttl = cfg.get("cache_seconds", 300)
+        with _SEARCH_SNAPSHOTS_LOCK:
+            now = time.monotonic()
+            expired = [k for k, entry in _SEARCH_SNAPSHOTS.items() if entry["expires"] < now]
+            for expired_key in expired:
+                del _SEARCH_SNAPSHOTS[expired_key]
+            if key not in _SEARCH_SNAPSHOTS:
+                if len(_SEARCH_SNAPSHOTS) >= 24:
+                    oldest = min(_SEARCH_SNAPSHOTS, key=lambda k: _SEARCH_SNAPSHOTS[k]["expires"])
+                    del _SEARCH_SNAPSHOTS[oldest]
+                _SEARCH_SNAPSHOTS[key] = {"items": [], "seen": set(),
+                    "next_page": cfg.get("start_page", 1), "has_next": True,
+                    "last_fetch": 0.0, "expires": now + ttl}
+            snapshot = _SEARCH_SNAPSHOTS[key]
+            fetches = 0
+            while len(snapshot["items"]) < end and snapshot["has_next"]:
+                if fetches >= 5:
+                    break
+                url = search_cfg["url_template"].format(query=quote(query.strip(), safe=""))
+                parsed = urlsplit(url)
+                params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+                params[cfg["page_param"]] = str(snapshot["next_page"])
+                url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(params), parsed.fragment))
+                spacing = cfg.get("request_spacing_seconds", 3)
+                remaining = spacing - (time.monotonic() - snapshot["last_fetch"])
+                if snapshot["last_fetch"] and remaining > 0:
+                    time.sleep(remaining)
+                response = self._make_request(url, rate_limit_seconds=spacing)
+                soup = BeautifulSoup(response.text, "html.parser")
+                if (soup.select_one('form[action*="validateCaptcha"]')
+                        or "robot check" in (soup.title.get_text(" ", strip=True).lower() if soup.title else "")):
+                    raise ValueError("Amazon requires manual verification; search was not parsed")
+                raw_items = []
+                for strategy in search_cfg["strategies"]:
+                    if strategy["type"] == "html_cards":
+                        raw_items = self._extract_css_search_cards(soup, strategy)
+                        if raw_items:
+                            break
+                for item in raw_items:
+                    if item["url"] not in snapshot["seen"]:
+                        snapshot["seen"].add(item["url"])
+                        snapshot["items"].append(item)
+                snapshot["has_next"] = bool(soup.select_one(cfg["next_selector"]))
+                if not raw_items:
+                    snapshot["has_next"] = False
+                snapshot["next_page"] += 1
+                snapshot["last_fetch"] = time.monotonic()
+                snapshot["expires"] = snapshot["last_fetch"] + ttl
+                fetches += 1
+            return {"items": snapshot["items"][start:end], "page": page,
+                    "page_size": page_size, "has_next": len(snapshot["items"]) > end or snapshot["has_next"],
+                    "total": len(snapshot["items"]) if not snapshot["has_next"] else None}

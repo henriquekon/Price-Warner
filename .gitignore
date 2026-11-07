@@ -10,3 +10,4 @@ env/
 *.db-wal
 notifications.log
 .streamlit/
+*.img

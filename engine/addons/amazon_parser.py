@@ -29,6 +29,7 @@ class AmazonProductResult:
     price_source: str | None = None
     reason: str | None = None
     variants: tuple[dict, ...] = ()
+    image_url: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -70,7 +71,6 @@ def _single_purchase_prices(soup: BeautifulSoup) -> tuple[set[Decimal], str | No
         "#buybox .a-accordion-active .apex-pricetopay-value .a-offscreen",
         "#buybox .a-accordion-active .a-price:not(.a-text-price) .a-offscreen",
         "#apex_offerDisplay_desktop #corePrice_feature_div .apex-pricetopay-value .a-offscreen",
-        "#buybox .a-price:not(.a-text-price) .a-offscreen",
     )
     for selector in selectors:
         prices: set[Decimal] = set()
@@ -123,6 +123,31 @@ def extract_amazon_variants(soup: BeautifulSoup, current_asin: str) -> tuple[dic
     return tuple(variants) if len(variants) > 1 else ()
 
 
+def extract_amazon_image(soup: BeautifulSoup) -> str | None:
+    """Find a product image candidate; the addon validates its HTTPS host."""
+    image = soup.select_one("#landingImage, #imgTagWrapperId img")
+    if image is not None:
+        for attribute in ("data-old-hires", "src"):
+            value = image.get(attribute)
+            if isinstance(value, str) and value.startswith("https://"):
+                return value
+        dynamic = image.get("data-a-dynamic-image")
+        if dynamic:
+            try:
+                import json
+                urls = json.loads(dynamic)
+                if isinstance(urls, dict):
+                    return next((url for url in urls if url.startswith("https://")), None)
+            except (ValueError, TypeError):
+                pass
+    og_image = soup.select_one('meta[property="og:image"]')
+    if og_image is not None:
+        value = og_image.get("content")
+        if isinstance(value, str) and value.startswith("https://"):
+            return value
+    return None
+
+
 def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
     """Parse previously acquired HTML, without fetching or saving anything."""
     asin, canonical = normalize_amazon_url(url)
@@ -143,9 +168,13 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
     if not name:
         return AmazonProductResult("invalid_page", asin, canonical, reason="Product title is empty")
 
+    image_url = extract_amazon_image(soup)
     availability_node = soup.select_one("#availability")
     availability_text = availability_node.get_text(" ", strip=True).lower() if availability_node else ""
-    if any(word in availability_text for word in ("indisponível", "fora de estoque", "temporariamente esgotado")):
+    if any(word in availability_text for word in (
+        "não disponível", "indisponível", "fora de estoque", "esgotado",
+        "não temos previsão", "nao disponivel", "currently unavailable", "out of stock",
+    )):
         availability = "out_of_stock"
     elif "em estoque" in availability_text:
         availability = "in_stock"
@@ -153,60 +182,18 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
         availability = "unknown"
 
     variants = extract_amazon_variants(soup, asin)
+    if availability == "out_of_stock":
+        return AmazonProductResult("out_of_stock", asin, canonical, name, availability=availability,
+                                   reason="Product is currently unavailable", variants=variants,
+                                   image_url=image_url)
     prices, source = _single_purchase_prices(soup)
-
     if len(prices) > 1:
-        return AmazonProductResult(
-            "ambiguous_price",
-            asin,
-            canonical,
-            name,
-            availability=availability,
-            reason="Conflicting one-time purchase prices",
-        )
-
-    if len(prices) == 1:
-        price = next(iter(prices))
-    else:
-        price = None
-
-    if price is None:
-        variants = extract_amazon_variants(soup, asin)
-        selected = [
-            variant
-            for variant in variants
-            if variant.get("selected") is True
-            and variant.get("asin") == asin
-            and variant.get("display_price") is not None
-        ]
-
-        if len(selected) == 1:
-            try:
-                candidate = Decimal(str(selected[0]["display_price"]))
-                if candidate > 0:
-                    price = candidate
-                    source = "selected_variant_display_price"
-            except InvalidOperation:
-                pass
-
-    if price is None:
-        return AmazonProductResult(
-            "price_unavailable",
-            asin,
-            canonical,
-            name,
-            availability=availability,
-            reason="Reliable product price not found",
-            variants=variants
-        )
-
-    return AmazonProductResult(
-        "ok",
-        asin,
-        canonical,
-        name,
-        f"{price:.2f}",
-        availability=availability,
-        price_source=source,
-        variants=variants
-    )
+        return AmazonProductResult("ambiguous_price", asin, canonical, name, availability=availability,
+                                   reason="Conflicting one-time purchase prices", variants=variants, image_url=image_url)
+    if not prices:
+        return AmazonProductResult("price_unavailable", asin, canonical, name, availability=availability,
+                                   reason="Reliable one-time purchase price not found", variants=variants,
+                                   image_url=image_url)
+    price = next(iter(prices))
+    return AmazonProductResult("ok", asin, canonical, name, f"{price:.2f}",
+                               availability=availability, price_source=source, variants=variants, image_url=image_url)

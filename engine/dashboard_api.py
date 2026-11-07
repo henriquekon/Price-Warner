@@ -24,6 +24,7 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
             .order_by(Product.id.desc()).all())
     product_ids = [product.id for product, _ in rows]
     history = {}
+    last_availability = {}
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     days = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
     cutoff = now - days[period] if period != "last" else None
@@ -33,6 +34,7 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
                    .order_by(PriceHistory.product_id, PriceHistory.fetched_at.desc(), PriceHistory.id.desc())
                    .all())
         for item in records:
+            last_availability.setdefault(item.product_id, item.availability or "unknown")
             entries = history.setdefault(item.product_id, [])
             if item.price is not None:
                 if period == "last" and len(entries) >= 2:
@@ -47,8 +49,9 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
         else:
             in_window = [entry for entry in prices if entry.fetched_at >= cutoff]
             previous = in_window[-1] if len(in_window) > 1 else None
+        unavailable = last_availability.get(product.id) == "out_of_stock"
         change = ((latest.price - previous.price) / previous.price * 100
-                  if latest and previous and previous.price > 0 else None)
+                  if latest and previous and previous.price > 0 and not unavailable else None)
         items.append({
             "id": product.id, "name": product.name, "url": product.url,
             "store_id": product.store_id, "image_url": product.image_url,
@@ -59,7 +62,7 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
             "price": latest.price if latest else None,
             "previous_price": previous.price if previous else None,
             "price_change_percent": round(change, 2) if change is not None else None,
-            "availability": latest.availability if latest else "unknown",
+            "availability": last_availability.get(product.id, "unknown"),
             "currency": "BRL",
         })
     matching = [item for item in items if

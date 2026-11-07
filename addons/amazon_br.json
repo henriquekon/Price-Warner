@@ -4,7 +4,10 @@
     "id": "amazon_br",
     "name": "Amazon Brasil",
     "base_url": "https://www.amazon.com.br",
-    "currency": "BRL"
+    "currency": "BRL",
+    "image_hosts": [
+      "m.media-amazon.com"
+    ]
   },
   "parser": "amazon_br",
   "request": {
@@ -40,6 +43,49 @@
         "name": "availability",
         "type": "css",
         "selector": "#availability"
+      }
+    ]
+  },
+  "search": {
+    "url_template": "https://www.amazon.com.br/s?k={query}",
+    "strategies": [
+      {
+        "name": "amazon_search_cards",
+        "type": "html_cards",
+        "card_selector": "[data-component-type=\"s-search-result\"][data-asin]",
+        "mapping": {
+          "name_selector": "h2 span",
+          "url_source": "data-asin",
+          "url_prefix": "https://www.amazon.com.br/dp/",
+          "asin_pattern": "^[A-Z0-9]{10}$",
+          "price_selector": ".a-price:not(.a-text-price) .a-offscreen",
+          "image_selector": "img.s-image",
+          "image_source": "src"
+        }
+      }
+    ],
+    "pagination": {
+      "type": "query_cursor",
+      "page_param": "page",
+      "start_page": 1,
+      "next_selector": "a.s-pagination-next",
+      "cache_seconds": 300,
+      "request_spacing_seconds": 3
+    }
+  },
+  "product_image": {
+    "strategies": [
+      {
+        "name": "primary_image",
+        "type": "css",
+        "selector": "#landingImage"
+      },
+      {
+        "name": "og_image",
+        "type": "meta",
+        "attribute": "property",
+        "value": "og:image",
+        "extract": "content"
       }
     ]
   }

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import TagPicker from './TagPicker';
 import { ArrowLeft, ArrowUpRight, CheckCircle2, CircleAlert, ExternalLink, Save } from 'lucide-react';
 
 type Observation = { id:number; price:number|null; availability:string|null; fetched_at:string; strategy_used:string|null };
-type Details = { id:number; name:string; url:string; store_id:string; image_url:string|null; last_checked:string|null; last_error:string|null; interval:number; target_drop_percentage:number; is_active:boolean; history:Observation[] };
+type Details = { id:number; name:string; url:string; store_id:string; image_url:string|null; last_checked:string|null; last_error:string|null; interval:number; target_drop_percentage:number; is_active:boolean; tags:string[]; history:Observation[] };
 const formatMoney = (price:number|null) => price===null?'Unavailable':new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(price);
 const formatDate = (date:string) => new Date(date.endsWith('Z')?date:`${date}Z`).toLocaleString('pt-BR');
 
@@ -37,13 +38,14 @@ export default function ProductDetails({id,onBack,onSaved}:{id:number;onBack:()=
   const [interval,setInterval]=useState(60);
   const [drop,setDrop]=useState(10);
   const [active,setActive]=useState(true);
+  const [tags,setTags]=useState<string[]>([]);
   useEffect(()=>{
     let alive=true;
     setLoading(true);setError('');setSaved(false);
     fetch(`/products/${id}/details`,{credentials:'same-origin'}).then(async response=>{
       if(!response.ok)throw new Error(`Unable to load details (${response.status})`);
       return response.json() as Promise<Details>;
-    }).then(result=>{if(alive){setData(result);setInterval(result.interval);setDrop(result.target_drop_percentage);setActive(result.is_active)}})
+    }).then(result=>{if(alive){setData(result);setInterval(result.interval);setDrop(result.target_drop_percentage);setActive(result.is_active);setTags(result.tags??[])}})
       .catch(cause=>{if(alive)setError(cause instanceof Error?cause.message:'Unable to load details')})
       .finally(()=>{if(alive)setLoading(false)});
     return ()=>{alive=false};
@@ -55,9 +57,9 @@ export default function ProductDetails({id,onBack,onSaved}:{id:number;onBack:()=
       const csrfResponse=await fetch('/auth/csrf',{credentials:'same-origin'});
       if(!csrfResponse.ok)throw new Error('Unable to retrieve CSRF token');
       const {csrf_token}=await csrfResponse.json() as {csrf_token:string|null};
-      const response=await fetch(`/products/${id}/monitoring`,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf_token?{'X-CSRF-Token':csrf_token}:{})},body:JSON.stringify({interval,target_drop_percentage:drop,is_active:active})});
+      const response=await fetch(`/products/${id}/monitoring`,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf_token?{'X-CSRF-Token':csrf_token}:{})},body:JSON.stringify({interval,target_drop_percentage:drop,is_active:active,tags})});
       if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(typeof body.detail==='string'?body.detail:`Unable to save (${response.status})`)}
-      setData(previous=>previous?{...previous,interval,target_drop_percentage:drop,is_active:active}:null);
+      setData(previous=>previous?{...previous,interval,target_drop_percentage:drop,is_active:active,tags}:null);
       setSaved(true);await onSaved();
     }catch(cause){setError(cause instanceof Error?cause.message:'Unable to save settings')}
     finally{setSaving(false)}
@@ -71,7 +73,7 @@ export default function ProductDetails({id,onBack,onSaved}:{id:number;onBack:()=
       <div className="detail-metrics"><div><span>Latest price</span><strong>{formatMoney(values.length?values[values.length-1]:null)}</strong></div><div><span>Lowest recorded</span><strong>{formatMoney(values.length?Math.min(...values):null)}</strong></div><div><span>Highest recorded</span><strong>{formatMoney(values.length?Math.max(...values):null)}</strong></div><div><span>Target drop</span><strong>{data.target_drop_percentage}%</strong></div></div>
       {data.last_error&&<div className="notice error"><CircleAlert size={16}/>Last check error: {data.last_error}</div>}
       <div className="detail-columns"><section className="detail-panel"><div className="detail-panel-head"><h2>Price history</h2><span>Last {data.history.length} observations</span></div><HistoryChart history={data.history}/><p className="detail-footnote">Recorded prices are shared across monitors of this product. Alerts and settings remain private to your account.</p></section>
-      <form className="detail-panel detail-settings" onSubmit={save}><h2>Monitoring settings</h2><label>Check interval (minutes)<input type="number" min={1} max={10080} required value={interval} onChange={e=>setInterval(Number(e.target.value))}/></label><label>Target price drop (%)<input type="number" min={0.1} max={100} step={0.1} required value={drop} onChange={e=>setDrop(Number(e.target.value))}/></label><label className="detail-toggle"><input type="checkbox" checked={active} onChange={e=>setActive(e.target.checked)}/>Enable monitoring</label><p className="detail-footnote">Further drops of at least 5% from the last emailed price can trigger another alert while the target condition holds.</p><button type="submit" className="primary" disabled={saving}><Save size={16}/>{saving?'Saving...':'Save settings'}</button>{saved&&<p className="detail-success"><CheckCircle2 size={15}/>Settings saved successfully</p>}</form></div>
+      <form className="detail-panel detail-settings" onSubmit={save}><h2>Monitoring settings</h2><label>Check interval (minutes)<input type="number" min={1} max={10080} required value={interval} onChange={e=>setInterval(Number(e.target.value))}/></label><label>Target price drop (%)<input type="number" min={0.1} max={100} step={0.1} required value={drop} onChange={e=>setDrop(Number(e.target.value))}/></label><label className="detail-toggle"><input type="checkbox" checked={active} onChange={e=>setActive(e.target.checked)}/>Enable monitoring</label><TagPicker name={data.name} selected={tags} onChange={setTags}/><p className="detail-footnote">Tags are private to your account. Changes are saved with your monitoring settings.</p><p className="detail-footnote">Further drops of at least 5% from the last emailed price can trigger another alert while the target condition holds.</p><button type="submit" className="primary" disabled={saving}><Save size={16}/>{saving?'Saving...':'Save settings'}</button>{saved&&<p className="detail-success"><CheckCircle2 size={15}/>Settings saved successfully</p>}</form></div>
       <section className="detail-panel detail-observations"><h2>Recent observations</h2>{data.history.length===0?<p className="muted">No observations yet.</p>:<div className="detail-history-scroll"><table><thead><tr><th>CHECKED AT</th><th>PRICE</th><th>AVAILABILITY</th><th>STRATEGY</th></tr></thead><tbody>{[...data.history].reverse().slice(0,20).map(row=><tr key={row.id}><td>{formatDate(row.fetched_at)}</td><td>{formatMoney(row.price)}</td><td>{row.availability||'Unknown'}</td><td>{row.strategy_used||'Not available'}</td></tr>)}</tbody></table></div>}</section>
     </>}
   </section>;

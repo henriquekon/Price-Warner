@@ -14,6 +14,7 @@ from engine.config import ADDONS_DIR
 from engine.auth import current_user
 from engine.media import validate_product_image_url
 from engine.image_cache import image_proxy_url
+from engine.tags import fold, set_monitoring_tags, tags_by_monitoring, validated_tags_or_422
 
 router = APIRouter()
 
@@ -25,6 +26,7 @@ class ProductCreate(BaseModel):
     interval: int = Field(default=60, ge=1, le=10080, description="Interval in minutes")
     target_drop_percentage: float = Field(default=10.0, ge=0, le=100)
     image_url: Optional[str] = Field(default=None, max_length=2048)
+    tags: List[str] = Field(default_factory=list, max_length=12)
 
 # Dependency to get DB session
 def get_db():
@@ -37,27 +39,32 @@ def get_db():
 @router.get("/products")
 def get_all_products(db: Session = Depends(get_db), user: User = Depends(current_user)):
     rows = db.query(Product, Monitoring).join(Monitoring, Monitoring.product_id == Product.id).filter(Monitoring.user_id == user.id).all()
-    return [product_response(product, monitoring) for product, monitoring in rows]
+    labels = tags_by_monitoring(db, user.id, [monitoring.id for _, monitoring in rows])
+    return [product_response(product, monitoring, labels.get(monitoring.id, [])) for product, monitoring in rows]
 
 
-def product_response(product: Product, monitoring: Monitoring):
+def product_response(product: Product, monitoring: Monitoring, tags: list[str] | None = None):
     return {"id": product.id, "name": product.name, "url": product.url, "image_url": product.image_url,
             "image_proxy_url": image_proxy_url(product.image_url, product.store_id),
             "store_id": product.store_id, "interval": monitoring.interval,
             "target_drop_percentage": monitoring.target_drop_percentage,
             "is_active": monitoring.is_active, "last_checked": product.last_checked,
-            "last_error": product.last_error}
+            "last_error": product.last_error, "tags": tags or []}
 
 
 # Search by name
 @router.get("/products/search")
 def search_products(q: str = FastAPIQuery(..., min_length=1), db: Session = Depends(get_db), user: User = Depends(current_user)):
     rows = db.query(Product, Monitoring).join(Monitoring, Monitoring.product_id == Product.id).filter(
-        Monitoring.user_id == user.id, Product.name.ilike(f"%{q}%")).all()
-    return [product_response(product, monitoring) for product, monitoring in rows]
+        Monitoring.user_id == user.id).all()
+    labels = tags_by_monitoring(db, user.id, [monitoring.id for _, monitoring in rows])
+    needle = fold(q)
+    return [product_response(product, monitoring, labels.get(monitoring.id, [])) for product, monitoring in rows
+            if needle in fold(product.name) or any(needle in fold(tag) for tag in labels.get(monitoring.id, []))]
 
 @router.post("/products", status_code=201)
 def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    tag_names = validated_tags_or_422(prod.tags)
     addon_path = ADDONS_DIR / f"{prod.store_id}.json"
     if not addon_path.is_file():
         raise HTTPException(400, "Unsupported store addon")
@@ -88,8 +95,11 @@ def add_new_product(prod: ProductCreate, db: Session = Depends(get_db), user: Us
                           image_url=image_url)
         db.add(product)
         db.flush()
-    db.add(Monitoring(user_id=user.id, product_id=product.id,
-                      interval=prod.interval, target_drop_percentage=prod.target_drop_percentage))
+    monitoring = Monitoring(user_id=user.id, product_id=product.id,
+                            interval=prod.interval, target_drop_percentage=prod.target_drop_percentage)
+    db.add(monitoring)
+    db.flush()
+    set_monitoring_tags(db, user.id, monitoring.id, tag_names)
     try:
         db.commit()
     except IntegrityError as exc:
@@ -108,6 +118,8 @@ def stop_monitoring(product_id: int, db: Session = Depends(get_db), user: User =
     if event_ids:
         db.query(AlertMetadata).filter(AlertMetadata.event_id.in_(event_ids)).delete(synchronize_session=False)
         db.query(NotificationEvent).filter(NotificationEvent.id.in_(event_ids)).delete(synchronize_session=False)
+    from data.models import MonitoringTag
+    db.query(MonitoringTag).filter(MonitoringTag.monitoring_id == monitoring.id).delete(synchronize_session=False)
     db.query(PriceCycleState).filter(PriceCycleState.monitoring_id == monitoring.id).delete(synchronize_session=False)
     db.delete(monitoring)
     db.flush()

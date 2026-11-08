@@ -18,6 +18,7 @@ from engine.alerts_api import router as alerts_router
 from engine.discovery_api import router as discovery_router
 from engine.product_details_api import router as product_details_router
 from engine.image_cache import router as image_router
+from engine.tags import router as tags_router
 from engine.core import price_scheduler
 from engine.config import RUN_SCHEDULER
 
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
                 logger.info("Price scheduler stopped")
 
 
-app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.2", lifespan=lifespan)
+app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.3", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(notifications_router)
 app.include_router(dashboard_router)
@@ -50,6 +51,7 @@ app.include_router(product_details_router)
 api_router.routes[:] = [route for route in api_router.routes if route.path != "/"]
 app.include_router(api_router)
 app.include_router(image_router)
+app.include_router(tags_router)
 
 frontend_dist = Path(__file__).resolve().parent / "frontend" / "dist"
 if frontend_dist.joinpath("index.html").is_file():

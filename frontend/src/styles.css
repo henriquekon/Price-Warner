@@ -24,3 +24,32 @@
 .state-oos{color:#ffcf8a}.state-oos>span{background:#e6ad63}
 
 .price-cell small{display:block;margin-top:4px;font-weight:400}
+
+.tag-picker{border:1px solid #384351;border-radius:12px;padding:15px;background:#121924;display:grid;gap:10px;min-width:0}
+.tag-picker-heading{display:flex;align-items:center;gap:9px;color:#e5f1e1;font-size:13px}
+.tag-picker-heading svg{color:#c9ff68}
+.tag-picker-heading span{font-size:11px;color:#8b9aa9;margin-left:auto}
+.tag-picker-help{font-size:11px;color:#9caabb;line-height:1.5;margin:0}
+.tag-picker-error{font-size:11px;color:#ffb2b2;margin:0}
+.tag-choices{display:flex;flex-wrap:wrap;gap:8px;max-height:185px;overflow-y:auto}
+.tag-choice{display:inline-flex!important;align-items:center!important;gap:7px!important;padding:7px 9px;border:1px solid #3b4654;border-radius:8px;background:#222b36;color:#c3cfdb;font-size:12px!important;cursor:pointer}
+.tag-choice input{accent-color:#c9ff68;margin:0;width:auto!important}
+.tag-choice-selected{background:#30422e;border-color:#668053;color:#d7f2c7}
+.tag-choice small{color:#c9ff68;font-size:10px}
+.tag-create{display:flex;gap:8px;align-items:center}
+.tag-create input{flex:1;min-width:0;background:#10151e;border:1px solid #394151;color:#fff;border-radius:9px;padding:11px;font-size:12px}
+.tag-create button{white-space:nowrap}
+.product-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.product-tags .product-tag{display:inline-flex;border:1px solid #42523b;border-radius:5px;background:#26352a;color:#c8eba6;padding:3px 7px;font-size:10px;cursor:pointer}
+.product-tag:hover{background:#354a32}
+.sort-header{border:0;background:transparent;color:inherit;font:inherit;letter-spacing:inherit;padding:0;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.sort-header:hover,.sort-header.active{color:#c9ff68}
+.search-sort{display:flex;align-items:center;gap:10px;font-size:12px;color:#a7b4c3}
+.search-sort select{background:#10151e;border:1px solid #394151;color:#edf3f7;border-radius:8px;padding:8px 10px}
+.sort-note{font-size:11px;color:#8795a4;margin:8px 0 18px}
+.tag-dialog-backdrop{position:fixed;inset:0;z-index:35;background:rgba(4,8,12,.78);display:grid;place-items:center;padding:18px}
+.tag-dialog{background:#1b2430;border:1px solid #3a4554;border-radius:16px;padding:23px;max-width:600px;width:100%;max-height:90vh;overflow:auto;display:grid;gap:16px}
+.tag-dialog h2{font-family:Manrope,sans-serif;font-size:22px;margin:0}
+.tag-dialog-product{color:#b5c2d2;font-size:13px;line-height:1.5;margin:0;overflow-wrap:anywhere}
+.tag-dialog-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+@media(max-width:850px){.filter-bar{flex-wrap:wrap}.tag-dialog{padding:15px}}

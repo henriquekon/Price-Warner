@@ -139,3 +139,20 @@ class AlertMetadata(Base):
     reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Tag(Base):
+    """A label belonging to one account, independent of shared products."""
+    __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("user_id", "normalized_name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class MonitoringTag(Base):
+    """Associates the account's tags with its individual monitoring."""
+    __tablename__ = "monitoring_tags"
+    monitoring_id: Mapped[int] = mapped_column(ForeignKey("monitorings.id"), primary_key=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id"), primary_key=True)

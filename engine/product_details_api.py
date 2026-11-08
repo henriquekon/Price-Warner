@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from data.models import Monitoring, PriceHistory, Product, User
+from engine.tags import set_monitoring_tags, tags_by_monitoring, validated_tags_or_422
 from engine.auth import current_user, get_db
 
 router = APIRouter(prefix="/products", tags=["product-details"])
@@ -13,6 +14,7 @@ class MonitoringUpdate(BaseModel):
     interval: int = Field(ge=1, le=10080)
     target_drop_percentage: float = Field(gt=0, le=100)
     is_active: bool
+    tags: list[str] | None = Field(default=None, max_length=12)
 
 
 def owned_product(db: Session, user: User, product_id: int):
@@ -43,6 +45,7 @@ def product_details(product_id: int, db: Session = Depends(get_db), user: User =
         "interval": monitoring.interval,
         "target_drop_percentage": monitoring.target_drop_percentage,
         "is_active": monitoring.is_active,
+        "tags": tags_by_monitoring(db, user.id, [monitoring.id]).get(monitoring.id, []),
         "history": [
             {"id": row.id, "price": row.price, "availability": row.availability,
              "fetched_at": row.fetched_at, "strategy_used": row.strategy_used}
@@ -58,7 +61,11 @@ def update_monitoring(product_id: int, update: MonitoringUpdate,
     monitoring.interval = update.interval
     monitoring.target_drop_percentage = update.target_drop_percentage
     monitoring.is_active = update.is_active
+    if update.tags is not None:
+        tag_names = validated_tags_or_422(update.tags)
+        set_monitoring_tags(db, user.id, monitoring.id, tag_names)
     db.commit()
     return {"id": product_id, "interval": monitoring.interval,
             "target_drop_percentage": monitoring.target_drop_percentage,
-            "is_active": monitoring.is_active}
+            "is_active": monitoring.is_active,
+            "tags": tags_by_monitoring(db, user.id, [monitoring.id]).get(monitoring.id, [])}

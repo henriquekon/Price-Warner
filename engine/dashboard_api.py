@@ -1,5 +1,6 @@
 """Dashboard data for the React interface."""
 from engine.image_cache import image_proxy_url
+from engine.tags import fold, tags_by_monitoring
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, Query
@@ -17,12 +18,15 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
               q: str = Query("", max_length=120),
               store_id: str = Query("all", max_length=64),
               status: Literal["all", "active", "drops", "errors"] = "all",
+              sort: Literal["newest", "name_asc", "name_desc", "price_asc", "price_desc",
+                            "change_asc", "change_desc", "last_checked"] = "newest",
               db: Session = Depends(get_db), user: User = Depends(current_user)):
     rows = (db.query(Product, Monitoring)
             .join(Monitoring, Monitoring.product_id == Product.id)
             .filter(Monitoring.user_id == user.id)
             .order_by(Product.id.desc()).all())
     product_ids = [product.id for product, _ in rows]
+    labels = tags_by_monitoring(db, user.id, [monitoring.id for _, monitoring in rows])
     history = {}
     last_availability = {}
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -63,14 +67,31 @@ def dashboard(period: Literal["last", "24h", "7d", "30d"] = "7d",
             "previous_price": previous.price if previous else None,
             "price_change_percent": round(change, 2) if change is not None else None,
             "availability": last_availability.get(product.id, "unknown"),
-            "currency": "BRL",
+            "currency": "BRL", "tags": labels.get(monitoring.id, []),
         })
     matching = [item for item in items if
                 (store_id == "all" or item["store_id"] == store_id) and
                 (status != "active" or item["is_active"]) and
                 (status != "errors" or item["last_error"]) and
                 (status != "drops" or (item["price_change_percent"] is not None and item["price_change_percent"] < 0)) and
-                (not q.strip() or q.strip().casefold() in f"{item['name']} {item['store_id']}".casefold())]
+                (not q.strip() or fold(q.strip()) in
+                 fold(f"{item['name']} {item['store_id']} {' '.join(item['tags'])}"))]
+    if sort == "newest":
+        matching.sort(key=lambda item: -item["id"])
+    elif sort in {"name_asc", "name_desc"}:
+        matching.sort(key=lambda item: (fold(item["name"]), item["id"]),
+                      reverse=sort == "name_desc")
+    elif sort in {"price_asc", "price_desc", "change_asc", "change_desc"}:
+        field = "price" if sort.startswith("price_") else "price_change_percent"
+        descending = sort.endswith("desc")
+        matching.sort(key=lambda item: (item[field] is None,
+                                        -(item[field]) if descending and item[field] is not None
+                                        else (item[field] if item[field] is not None else 0),
+                                        item["id"]))
+    elif sort == "last_checked":
+        matching.sort(key=lambda item: (item["last_checked"] is None,
+                                        -(item["last_checked"].timestamp()) if item["last_checked"] else 0,
+                                        item["id"]))
     start = (page - 1) * page_size
     return {
         "pagination": {"page": page, "page_size": page_size, "total": len(matching),

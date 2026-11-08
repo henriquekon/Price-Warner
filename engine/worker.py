@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import os
 
 from engine.migrations import upgrade
 from engine.core import price_scheduler
 
-logging.basicConfig(level=logging.INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 
 
 def main():

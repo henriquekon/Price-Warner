@@ -229,6 +229,7 @@ class AddonScraper:
                 "price": float(parsed.price) if parsed.price is not None else None,
                 "product_name": parsed.name,
                 "availability": parsed.availability,
+                "offer_origin": parsed.offer_origin,
                 "image_url": validate_product_image_url(parsed.image_url, self.addon),
                 "strategies_used": {"price": parsed.price_source},
                 "variants": list(parsed.variants),

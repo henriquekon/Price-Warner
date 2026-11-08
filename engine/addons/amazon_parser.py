@@ -30,6 +30,7 @@ class AmazonProductResult:
     reason: str | None = None
     variants: tuple[dict, ...] = ()
     image_url: str | None = None
+    offer_origin: str = "unknown"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -65,32 +66,105 @@ def _parse_brl(raw: str | None) -> Decimal | None:
     return value if value > 0 else None
 
 
-def _single_purchase_prices(soup: BeautifulSoup) -> tuple[set[Decimal], str | None]:
-    """Collect only explicit one-time purchase offer price candidates."""
-    selectors = (
-        "#buybox .a-accordion-active .apex-pricetopay-value .a-offscreen",
-        "#buybox .a-accordion-active .a-price:not(.a-text-price) .a-offscreen",
-        "#apex_offerDisplay_desktop #corePrice_feature_div .apex-pricetopay-value .a-offscreen",
-    )
-    for selector in selectors:
-        prices: set[Decimal] = set()
-        for node in soup.select(selector):
-            if node.find_parent(id="subscriptionPrice") or node.find_parent(id="sns-base-price"):
-                continue
-            if node.find_parent(class_="aok-hidden"):
-                continue
+def _amazon_core_offer_prices(soup: BeautifulSoup, current_asin: str) -> set[Decimal]:
+    """Read only the active product's core offer, not format or related-item prices."""
+    widget = soup.select_one("#corePriceDisplay_desktop_feature_div")
+    if widget is None:
+        return set()
+    owner = (widget.get("data-csa-c-asin") or "").upper()
+    if owner and owner != current_asin:
+        return set()
+
+    prices: set[Decimal] = set()
+    for offer in widget.select(".apex-core-price-identifier"):
+        label = offer.select_one("#apex-pricetopay-accessibility-label")
+        if label is not None:
+            value = _parse_brl(label.get_text(" ", strip=True))
+            if value is not None:
+                prices.add(value)
+
+        amount = offer.get("data-csa-c-price-to-pay")
+        if amount:
+            try:
+                value = Decimal(str(amount))
+            except InvalidOperation:
+                value = None
+            if value is not None and value.is_finite() and value > 0:
+                prices.add(value)
+
+        for node in offer.select(".apex-pricetopay-value .a-offscreen"):
             value = _parse_brl(node.get_text(" ", strip=True))
             if value is not None:
                 prices.add(value)
-        if prices:
-            return prices, selector
-    return set(), None
+    return prices
+
+
+def _visible_primary_price(node, current_asin: str) -> Decimal | None:
+    """Reject hidden, alternate-format and subscription prices before parsing."""
+    for ancestor in (node, *node.parents):
+        classes = set(ancestor.get("class", [])) if ancestor.name else set()
+        if ("aok-hidden" in classes or "a-text-price" in classes
+                or ancestor.get("aria-hidden") == "true"
+                or "display:none" in (ancestor.get("style") or "").replace(" ", "").lower()):
+            return None
+        if ancestor.get("id") in {
+            "subscriptionPrice", "sns-base-price", "formats", "tmmSwatches",
+            "inline-twister-row-media_format", "usedBuySection",
+        }:
+            return None
+        owner = ancestor.get("data-csa-c-asin")
+        if owner and owner.upper() != current_asin:
+            return None
+    raw = node.get("aria-label") or node.get("content") or node.get_text(" ", strip=True)
+    return _parse_brl(raw)
+
+
+def _single_purchase_prices(soup: BeautifulSoup, current_asin: str) -> tuple[set[Decimal], str | None]:
+    """Try classic, current and narrowly scoped fallback selectors.
+
+    Different prices from different layouts are not silently ranked: a contradictory
+    page is ambiguous, which is safer for a price alerting application.
+    """
+    strategies = (
+        ("legacy_one_time_purchase", (
+            "#buybox .a-accordion-active .apex-pricetopay-value .a-offscreen",
+            "#buybox .a-accordion-active .a-price:not(.a-text-price) .a-offscreen",
+            "#apex_offerDisplay_desktop #corePrice_feature_div .apex-pricetopay-value .a-offscreen",
+        )),
+        ("amazon_core_offer_price", ()),
+        ("scoped_primary_price", (
+            "#corePriceDisplay_desktop_feature_div .priceToPay .a-offscreen",
+            "#corePrice_feature_div .priceToPay .a-offscreen",
+            "#corePrice_feature_div .a-price:not(.a-text-price) .a-offscreen",
+            "#price_inside_buybox",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice",
+        )),
+    )
+    collected: set[Decimal] = set()
+    chosen: str | None = None
+    for name, selectors in strategies:
+        candidates: set[Decimal] = set()
+        if name == "amazon_core_offer_price":
+            candidates = _amazon_core_offer_prices(soup, current_asin)
+        else:
+            for selector in selectors:
+                for node in soup.select(selector):
+                    candidate = _visible_primary_price(node, current_asin)
+                    if candidate is not None:
+                        candidates.add(candidate)
+        if candidates:
+            if chosen is None:
+                chosen = name
+            collected.update(candidates)
+    return collected, chosen
 
 
 def extract_amazon_variants(soup: BeautifulSoup, current_asin: str) -> tuple[dict, ...]:
-    """Extract book formats with independent Amazon Brazil product URLs."""
-    variants = []
-    seen = set()
+    """Extract book formats with independent ASINs from old and new twisters."""
+    variants: list[dict] = []
+    seen: set[str] = set()
+
     for node in soup.select("#formats .swatchElement, #tmmSwatches .swatchElement"):
         link = node.select_one("a")
         label_node = node.select_one(".slot-title")
@@ -103,8 +177,7 @@ def extract_amazon_variants(soup: BeautifulSoup, current_asin: str) -> tuple[dic
         if selected:
             asin = current_asin
         else:
-            href = link.get("href", "")
-            match = _ASIN_PATH.search(href)
+            match = _ASIN_PATH.search(link.get("href", ""))
             if not match:
                 continue
             asin = match.group(1).upper()
@@ -120,7 +193,54 @@ def extract_amazon_variants(soup: BeautifulSoup, current_asin: str) -> tuple[dic
             "selected": selected,
             "display_price": str(indicative_price) if indicative_price is not None else None,
         })
+
+    for node in soup.select("#inline-twister-row-media_format li[data-asin]"):
+        asin = (node.get("data-asin") or "").upper()
+        if not _ASIN.fullmatch(asin) or asin in seen:
+            continue
+        label_node = node.select_one(".swatch-title-text")
+        if label_node is None:
+            continue
+        label = label_node.get_text(" ", strip=True)
+        if not label:
+            continue
+        selected = (
+            node.get("data-initiallyselected") == "true"
+            or node.select_one(".a-button-selected, input[aria-checked='true']") is not None
+        )
+        seen.add(asin)
+        variants.append({
+            "asin": asin,
+            "label": label,
+            "url": f"https://www.amazon.com.br/dp/{asin}",
+            "selected": selected,
+            "display_price": None,
+        })
+
     return tuple(variants) if len(variants) > 1 else ()
+
+
+def extract_amazon_offer_origin(soup: BeautifulSoup) -> str:
+    """An import-fees badge proves an international offer; absence proves nothing."""
+    badge = soup.select_one("#globalStoreBadgePopoverInsideBuybox_feature_div")
+    if badge is None:
+        return "unknown"
+    main = badge.select_one(".a-section.a-spacing-base")
+    if main is None:
+        return "unknown"
+    visible_parts = []
+    for node in main.find_all(string=True):
+        if node.parent.name in ("script", "style"):
+            continue
+        if node.parent.find_parent(class_="a-popover-preload") is not None:
+            continue
+        text = str(node).strip()
+        if text:
+            visible_parts.append(text)
+    text = " ".join(visible_parts).lower()
+    if "tributos de importação" in text or "tributos de importacao" in text:
+        return "international"
+    return "unknown"
 
 
 def extract_amazon_image(soup: BeautifulSoup) -> str | None:
@@ -182,18 +302,21 @@ def parse_amazon_product(html: str, url: str) -> AmazonProductResult:
         availability = "unknown"
 
     variants = extract_amazon_variants(soup, asin)
+    offer_origin = extract_amazon_offer_origin(soup)
     if availability == "out_of_stock":
         return AmazonProductResult("out_of_stock", asin, canonical, name, availability=availability,
                                    reason="Product is currently unavailable", variants=variants,
-                                   image_url=image_url)
-    prices, source = _single_purchase_prices(soup)
+                                   image_url=image_url, offer_origin=offer_origin)
+    prices, source = _single_purchase_prices(soup, asin)
     if len(prices) > 1:
         return AmazonProductResult("ambiguous_price", asin, canonical, name, availability=availability,
-                                   reason="Conflicting one-time purchase prices", variants=variants, image_url=image_url)
+                                   reason="Conflicting one-time purchase prices", variants=variants,
+                                   image_url=image_url, offer_origin=offer_origin)
     if not prices:
         return AmazonProductResult("price_unavailable", asin, canonical, name, availability=availability,
                                    reason="Reliable one-time purchase price not found", variants=variants,
-                                   image_url=image_url)
+                                   image_url=image_url, offer_origin=offer_origin)
     price = next(iter(prices))
     return AmazonProductResult("ok", asin, canonical, name, f"{price:.2f}",
-                               availability=availability, price_source=source, variants=variants, image_url=image_url)
+                               availability=availability, price_source=source, variants=variants,
+                               image_url=image_url, offer_origin=offer_origin)

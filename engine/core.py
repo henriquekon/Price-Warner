@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import time
+import httpx
 from datetime import datetime, timedelta
 
 
-from data.models import PriceHistory, Product, SessionLocal, Monitoring, NotificationSettings, NotificationEvent, User
+from data.models import PriceHistory, Product, SessionLocal, Monitoring, NotificationSettings, NotificationEvent, User, WorkerState
 from engine.config import ADDONS_DIR, SCHEDULER_INTERVAL_SECONDS
 from engine.notifier import Notifier
 from engine.scraper import AddonScraper
@@ -30,28 +32,33 @@ def check_price_alerts(session, product, current_price):
 
 
 def check_product(product_id: int, notifier: Notifier):
+    started = time.monotonic()
     with SessionLocal() as db:
         product = db.get(Product, product_id)
         if product is None or not product.is_active:
-            return
+            return "skipped"
         monitorings = db.query(Monitoring).filter(Monitoring.product_id == product_id, Monitoring.is_active.is_(True)).all()
         if not monitorings:
-            return
+            return "skipped"
 
         now = datetime.utcnow()
         interval = min(m.interval for m in monitorings)
         if product.last_checked is not None and now < product.last_checked + timedelta(minutes=interval):
-            return
+            return "skipped"
 
-        logger.info("Checking product %s", product.name)
+        logger.info("price_check_start product_id=%s store=%s", product.id, product.store_id)
         result = {}
         try:
             addon_path = ADDONS_DIR / f"{product.store_id}.json"
             with AddonScraper(addon_path) as scraper:
                 result = scraper.scrape(product.url)
 
-            if not result["ok"]:
-                raise ValueError("No valid price extracted")
+            if not result.get("ok"):
+                code = result.get("status") or "price_unavailable"
+                reason = result.get("reason") or "Reliable price not extracted"
+                raise ValueError(f"{code}: {reason}")
+            if result.get("availability") != "out_of_stock" and result.get("price") is None:
+                raise ValueError("price_unavailable: missing price for available product")
 
             cutoff = now - timedelta(days=30)
             prior_prices = [row[0] for row in db.query(PriceHistory.price).filter(
@@ -146,29 +153,112 @@ def check_product(product_id: int, notifier: Notifier):
                         notifier.send(message)
                     except OSError:
                         logger.exception("Notification log write failed for monitoring %s", monitoring_id)
+            outcome = "out_of_stock" if result.get("availability") == "out_of_stock" else "ok"
+            logger.info(
+                "price_check_result product_id=%s store=%s status=%s source=%s duration_ms=%d",
+                product_id, product.store_id, outcome,
+                result.get("strategies_used", {}).get("price") or "none",
+                round((time.monotonic() - started) * 1000),
+            )
+            return outcome
         except Exception as exc:
             db.rollback()
             product.last_error = str(exc)[:500]
-            image_url = validate_product_image_url(result.get("image_url"), load_addon(addon_path))
-            if image_url:
-                product.image_url = image_url
+            if result.get("image_url"):
+                try:
+                    image_url = validate_product_image_url(result["image_url"], load_addon(addon_path))
+                    if image_url:
+                        product.image_url = image_url
+                except Exception:
+                    logger.debug("Image validation was unavailable for failed product %s", product_id)
             product.last_checked = now
             db.commit()
-            logger.exception("Failed checking product %s", product_id)
+            if result.get("status"):
+                failure_code = result["status"]
+            elif isinstance(exc, httpx.TimeoutException):
+                failure_code = "timeout"
+            elif isinstance(exc, httpx.HTTPStatusError):
+                failure_code = f"http_{exc.response.status_code}"
+            elif isinstance(exc, httpx.RequestError):
+                failure_code = "network_error"
+            else:
+                failure_code = "unexpected_error"
+            duration = round((time.monotonic() - started) * 1000)
+            if isinstance(exc, ValueError) and result.get("status"):
+                logger.warning(
+                    "price_check_result product_id=%s store=%s status=%s duration_ms=%d",
+                    product_id, product.store_id, failure_code, duration,
+                )
+            else:
+                logger.exception(
+                    "price_check_result product_id=%s store=%s status=%s duration_ms=%d",
+                    product_id, product.store_id, failure_code, duration,
+                )
+            return "failed"
+
+
+def _update_worker_state(**fields):
+    with SessionLocal() as db:
+        state = db.get(WorkerState, 1)
+        if state is None:
+            state = WorkerState(id=1)
+            db.add(state)
+        for name, value in fields.items():
+            setattr(state, name, value)
+        db.commit()
 
 
 def run_due_checks(notifier: Notifier):
-    now = datetime.utcnow()
-    with SessionLocal() as db:
-        monitorings = db.query(Monitoring).filter(Monitoring.is_active.is_(True)).all()
-        intervals = {}
-        for monitoring in monitorings:
-            intervals[monitoring.product_id] = min(monitoring.interval, intervals.get(monitoring.product_id, monitoring.interval))
-        products = db.query(Product).filter(Product.is_active.is_(True), Product.id.in_(intervals)).all() if intervals else []
-        due_ids = [product.id for product in products
-                   if product.last_checked is None or now >= product.last_checked + timedelta(minutes=intervals[product.id])]
-    for product_id in due_ids:
-        check_product(product_id, notifier)
+    started = datetime.utcnow()
+    _update_worker_state(state="running", last_started_at=started,
+                         last_progress_at=started, last_error=None)
+    try:
+        with SessionLocal() as db:
+            monitorings = db.query(Monitoring).filter(Monitoring.is_active.is_(True)).all()
+            intervals = {}
+            for monitoring in monitorings:
+                intervals[monitoring.product_id] = min(
+                    monitoring.interval,
+                    intervals.get(monitoring.product_id, monitoring.interval),
+                )
+            products = (db.query(Product)
+                        .filter(Product.is_active.is_(True), Product.id.in_(intervals))
+                        .all()) if intervals else []
+            due_ids = [product.id for product in products
+                       if product.last_checked is None
+                       or started >= product.last_checked + timedelta(minutes=intervals[product.id])]
+        counts = {"ok": 0, "out_of_stock": 0, "failed": 0, "skipped": 0}
+        for product_id in due_ids:
+            try:
+                outcome = check_product(product_id, notifier)
+            except Exception:
+                logger.exception("price_check_uncaught product_id=%s", product_id)
+                outcome = "failed"
+            counts[outcome if outcome in counts else "failed"] += 1
+            _update_worker_state(last_progress_at=datetime.utcnow())
+        completed_at = datetime.utcnow()
+        completed = {
+            "state": "idle", "last_finished_at": completed_at,
+            "last_progress_at": completed_at, "last_due": len(due_ids),
+            "last_checked": counts["ok"] + counts["out_of_stock"],
+            "last_failed": counts["failed"],
+            "last_out_of_stock": counts["out_of_stock"], "last_error": None,
+        }
+        if not counts["failed"]:
+            completed["last_success_at"] = completed_at
+        _update_worker_state(**completed)
+        logger.info(
+            "worker_cycle due=%d checked=%d failed=%d out_of_stock=%d",
+            len(due_ids), counts["ok"] + counts["out_of_stock"],
+            counts["failed"], counts["out_of_stock"],
+        )
+        return counts
+    except Exception as exc:
+        _update_worker_state(
+            state="error", last_finished_at=datetime.utcnow(),
+            last_error=f"{type(exc).__name__}: scheduler cycle failed",
+        )
+        raise
 
 
 async def price_scheduler():

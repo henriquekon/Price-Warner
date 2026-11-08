@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BellRing, CheckCircle2, CircleAlert, Eye, EyeOff, Mail, Save, Send, ShieldCheck } from 'lucide-react';
+import { Activity, BellRing, CheckCircle2, CircleAlert, Eye, EyeOff, Mail, RefreshCw, Save, Send, ShieldCheck } from 'lucide-react';
 
 type SettingsData = {
   enabled: boolean;
@@ -13,6 +13,19 @@ type SettingsData = {
   cooldown_hours: number;
 };
 type Account = { email: string; mode: string; is_admin?: boolean };
+type SystemHealth = {
+  worker: {
+    status: 'healthy' | 'degraded' | 'stale' | 'error' | 'running' | 'not_started';
+    last_started_at: string | null;
+    last_finished_at: string | null;
+    last_success_at: string | null;
+    last_cycle: {due: number; checked: number; failed: number; out_of_stock: number} | null;
+  };
+  summary: {monitored: number; errors: number; pending: number; overdue: number; failed_emails_7d: number};
+  stores: {store_id: string; monitored: number; errors: number; pending: number; overdue: number}[];
+  recent_errors: {product_id: number; product_name: string; store_id: string; error: string; last_checked: string | null}[];
+};
+const formatTime = (value: string | null) => value ? new Date(value + (value.endsWith('Z') ? '' : 'Z')).toLocaleString() : 'Never';
 const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
@@ -37,12 +50,37 @@ export default function Settings({account}: {account: Account}) {
   const [changingPassword, setChangingPassword] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [healthError, setHealthError] = useState('');
+  const [healthBusy, setHealthBusy] = useState(false);
+  const refreshHealth = async () => {
+    setHealthBusy(true);
+    try {
+      setHealth(await request<SystemHealth>('/system/health'));
+      setHealthError('');
+    } catch (cause) {
+      setHealthError(cause instanceof Error ? cause.message : 'Unable to load worker health');
+    } finally {
+      setHealthBusy(false);
+    }
+  };
   useEffect(() => {
     let active = true;
     request<SettingsData>('/notifications/settings')
       .then(data => { if (active) setSettings(data); })
       .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Unable to load settings'); });
     return () => {active = false;};
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const poll = () => {
+      request<SystemHealth>('/system/health')
+        .then(value => {if (active) {setHealth(value); setHealthError('');}})
+        .catch(cause => {if (active) setHealthError(cause instanceof Error ? cause.message : 'Unable to load worker health');});
+    };
+    poll();
+    const timer = window.setInterval(poll, 60000);
+    return () => {active = false; window.clearInterval(timer);};
   }, []);
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) => setSettings(prev => prev ? {...prev, [key]: value} : prev);
   const save = async (event: React.FormEvent) => {
@@ -112,6 +150,21 @@ export default function Settings({account}: {account: Account}) {
         </form> : <p className="settings-help">Loading notification settings...</p>}
       </div>
       <div className="settings-side">
+        <div className="detail-panel settings-card">
+          <div className="settings-heading"><Activity size={21}/><div><h2>Monitoring health</h2><p>Worker heartbeat and checks for your products.</p></div></div>
+          <button className="secondary" type="button" disabled={healthBusy} onClick={refreshHealth}><RefreshCw size={15}/>{healthBusy ? 'Refreshing...' : 'Refresh status'}</button>
+          {healthError && <p className="settings-help" role="alert">{healthError}</p>}
+          {health ? <>
+            <div className="account-detail"><span>Worker</span><strong>{health.worker.status.replace('_', ' ')}</strong></div>
+            <div className="account-detail"><span>Last cycle finished</span><strong>{formatTime(health.worker.last_finished_at)}</strong></div>
+            <div className="account-detail"><span>Active monitors</span><strong>{health.summary.monitored}</strong></div>
+            <div className="account-detail"><span>Errors / overdue / pending</span><strong>{health.summary.errors} / {health.summary.overdue} / {health.summary.pending}</strong></div>
+            <div className="account-detail"><span>Failed emails (7 days)</span><strong>{health.summary.failed_emails_7d}</strong></div>
+            {health.worker.last_cycle && <p className="settings-help">Last cycle: {health.worker.last_cycle.checked} checked, {health.worker.last_cycle.failed} failed, {health.worker.last_cycle.out_of_stock} out of stock.</p>}
+            {health.stores.length > 0 && <><h3>Stores</h3>{health.stores.map(store => <div className="account-detail" key={store.store_id}><span>{store.store_id}</span><strong>{store.monitored} products, {store.errors} errors</strong></div>)}</>}
+            {health.recent_errors.length > 0 && <><h3>Recent issues</h3>{health.recent_errors.slice(0, 5).map(item => <p className="settings-help" key={item.product_id}><strong>{item.product_name}</strong>: {item.error}</p>)}</>}
+          </> : <p className="settings-help">Loading monitoring health...</p>}
+        </div>
         <div className="detail-panel settings-card"><div className="settings-heading"><ShieldCheck size={21}/><div><h2>Account</h2><p>Your current session.</p></div></div><div className="account-detail"><span>Email</span><strong>{account.email}</strong></div><div className="account-detail"><span>Authentication mode</span><strong>{account.mode}</strong></div>{account.is_admin && <div className="account-detail"><span>Role</span><strong>Administrator</strong></div>}</div>
         {account.mode !== 'local' && <div className="detail-panel settings-card"><div className="settings-heading"><Mail size={21}/><div><h2>Change password</h2><p>Update the password for this account.</p></div></div><form onSubmit={changePassword} className="settings-form"><label>Current password<input type="password" autoComplete="current-password" required minLength={12} value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/></label><label>New password<input type="password" autoComplete="new-password" required minLength={12} maxLength={128} value={newPassword} onChange={e=>setNewPassword(e.target.value)}/></label><button className="secondary" type="submit" disabled={changingPassword}>{changingPassword?'Updating...':'Update password'}</button></form></div>}
       </div>

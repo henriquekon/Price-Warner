@@ -29,6 +29,8 @@ def inspect_html(addon, html, url):
             "price": float(parsed.price) if parsed.price else None,
             "product_name": parsed.name,
             "availability": parsed.availability,
+            "offer_origin": parsed.offer_origin,
+            "variants": list(parsed.variants),
             "image_url": validate_product_image_url(parsed.image_url, addon),
             "strategies_used": {"price": parsed.price_source},
         }

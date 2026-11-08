@@ -156,3 +156,19 @@ class MonitoringTag(Base):
     __tablename__ = "monitoring_tags"
     monitoring_id: Mapped[int] = mapped_column(ForeignKey("monitorings.id"), primary_key=True)
     tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id"), primary_key=True)
+
+
+class WorkerState(Base):
+    """Last scheduler cycle heartbeat, shared by API and worker containers."""
+    __tablename__ = "worker_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), default="idle", nullable=False)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    last_due: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_checked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_out_of_stock: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

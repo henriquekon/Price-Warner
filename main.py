@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from engine.migrations import upgrade
 from engine.api import router as api_router
@@ -44,7 +44,18 @@ async def lifespan(app: FastAPI):
                 logger.info("Price scheduler stopped")
 
 
-app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.4", lifespan=lifespan)
+app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.5", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    if request.url.path.startswith("/auth/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 app.include_router(auth_router)
 app.include_router(notifications_router)
 app.include_router(dashboard_router)

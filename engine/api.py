@@ -164,9 +164,6 @@ def search_external_store(
     for item in results:
         item["image_proxy_url"] = image_proxy_url(item.get("image_url"), store_id)
 
-    print(f"[DEBUG API] Returned: {len(results)}")
-    print(f"[DEBUG API] Data returned: {results}\n")
-    
     return results
 
 @router.get("/products/search-external-paged")

@@ -145,7 +145,7 @@ export default function App() {
         <Pagination page={watchPage} pageSize={watchSize} total={matchingTotal}
           disabled={deletingId !== null} onPage={setWatchPage}
           onPageSize={size=>{setWatchSize(size);setWatchPage(1)}}/>
-      </section></>}<footer className="app-footer"><span><CheckCircle2 size={14}/>Connected to Price-Warner API</span><span>Price-Warner B1.3</span></footer></main></div></div>;
+      </section></>}<footer className="app-footer"><span><CheckCircle2 size={14}/>Connected to Price-Warner API</span><span>Price-Warner B1.4</span></footer></main></div></div>;
 }
 
 function Stat({label,value,detail,icon,accent=false}:{label:string;value:number;detail:string;icon:React.ReactNode;accent?:boolean}) {return <div className={`stat ${accent?'stat-accent':''}`}><div className="stat-top"><span>{label}</span><div className="stat-icon">{icon}</div></div><div className="stat-value">{value.toLocaleString('en-US')}</div><div className="stat-detail"><Clock3 size={13}/>{detail}</div></div>}

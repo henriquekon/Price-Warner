@@ -15,14 +15,13 @@ def main():
     if not args.database.is_file():
         parser.error(f"Database not found: {args.database}")
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    destination = args.output_dir / f"price-warner-{stamp}.sqlite3"
-    if destination.exists():
-        parser.error(f"Backup already exists: {destination}")
-
     previous_umask = os.umask(0o077)
     try:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = args.output_dir / f"price-warner-{stamp}.sqlite3"
+        if destination.exists():
+            parser.error(f"Backup already exists: {destination}")
         source = sqlite3.connect(f"file:{args.database.resolve()}?mode=ro", uri=True)
         backup = sqlite3.connect(str(destination))
         try:

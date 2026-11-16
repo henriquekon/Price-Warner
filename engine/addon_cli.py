@@ -34,6 +34,13 @@ def inspect_html(addon, html, url):
             "image_url": validate_product_image_url(parsed.image_url, addon),
             "strategies_used": {"price": parsed.price_source},
         }
+    if addon.get("parser") == "pichau_br":
+        from engine.addons.pichau_parser import parse_pichau_product
+        from engine.media import validate_product_image_url
+        parsed = parse_pichau_product(html, url)
+        parsed["store"] = addon["store"]["id"]
+        parsed["image_url"] = validate_product_image_url(parsed.get("image_url"), addon)
+        return parsed
     soup = BeautifulSoup(html, "html.parser")
     result = {
         "ok": False,

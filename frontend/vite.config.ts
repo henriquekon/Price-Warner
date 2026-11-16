@@ -11,6 +11,7 @@ export default defineConfig({
       '/products': 'http://127.0.0.1:9873',
       '/stores': 'http://127.0.0.1:9873',
       '/notifications': 'http://127.0.0.1:9873',
+      '/media': 'http://127.0.0.1:9873',
     },
   },
 });

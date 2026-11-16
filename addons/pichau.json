@@ -1,0 +1,89 @@
+{
+  "_comment": "Pichau Brasil. Prices refer to the visible Pix offer, not installment or crossed-out prices.",
+  "store": {
+    "id": "pichau",
+    "name": "Pichau",
+    "base_url": "https://www.pichau.com.br",
+    "currency": "BRL",
+    "image_hosts": [
+      "media.pichau.com.br"
+    ]
+  },
+  "parser": "pichau_br",
+  "request": {
+    "method": "GET",
+    "timeout": 30,
+    "rate_limit_seconds": 10,
+    "transport": "playwright_firefox"
+  },
+  "price": {
+    "strategies": [
+      {
+        "name": "pichau_pix_meta",
+        "type": "meta",
+        "attribute": "name",
+        "value": "product:price:amount",
+        "extract": "content"
+      }
+    ]
+  },
+  "product_name": {
+    "strategies": [
+      {
+        "name": "product_title",
+        "type": "css",
+        "selector": "h1"
+      }
+    ]
+  },
+  "availability": {
+    "strategies": [
+      {
+        "name": "availability_meta",
+        "type": "meta",
+        "attribute": "name",
+        "value": "product:availability",
+        "extract": "content"
+      }
+    ]
+  },
+  "product_image": {
+    "strategies": [
+      {
+        "name": "og_image",
+        "type": "meta",
+        "attribute": "property",
+        "value": "og:image",
+        "extract": "content"
+      }
+    ]
+  },
+  "search": {
+    "url_template": "https://www.pichau.com.br/search?q={query}",
+    "strategies": [
+      {
+        "name": "pichau_product_cards",
+        "type": "html_cards",
+        "card_selector": "a[data-cy=\"list-product\"][href]",
+        "mapping": {
+          "name_selector": "h2",
+          "url_source": "href",
+          "url_prefix": "https://www.pichau.com.br",
+          "price_selector": "div[class*=\"price_vista\"]",
+          "price_transform": "mixed_locale_brl",
+          "image_selector": "img",
+          "image_source": "src",
+          "out_of_stock_text": "Esgotado"
+        }
+      }
+    ],
+    "pagination": {
+      "type": "query_cursor",
+      "page_param": "page",
+      "start_page": 1,
+      "next_selector": "a[aria-label=\"Go to next page\"][href]",
+      "cache_seconds": 300,
+      "request_spacing_seconds": 10
+    }
+  }
+}

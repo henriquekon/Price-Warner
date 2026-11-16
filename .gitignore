@@ -18,3 +18,7 @@ backups/
 *.sqlite3-shm
 *.sqlite3-wal
 data/image-cache/
+
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

@@ -87,6 +87,11 @@ def validate_addon(addon):
         raise AddonValidationError("request must be an object")
     if request.get("method", "GET").upper() != "GET":
         raise AddonValidationError("Only GET requests are supported")
+    transport = request.get("transport", "httpx")
+    if transport not in ("httpx", "playwright_firefox"):
+        raise AddonValidationError("Unsupported request.transport")
+    if transport == "playwright_firefox" and (store_id, base_host) != ("pichau", "www.pichau.com.br"):
+        raise AddonValidationError("Firefox transport is currently limited to Pichau")
     if not isinstance(request.get("headers", {}), dict):
         raise AddonValidationError("request.headers must be an object")
     for field, minimum in (("timeout", 0.1), ("rate_limit_seconds", 0)):
@@ -97,7 +102,11 @@ def validate_addon(addon):
         if not minimum <= value <= (120 if field == "timeout" else 86400):
             raise AddonValidationError(f"request.{field} is outside the allowed range")
     parser = addon.get("parser")
-    if parser is not None and (parser != "amazon_br" or store_id != "amazon_br" or base_host != "www.amazon.com.br"):
+    permitted_parsers = {
+        "amazon_br": ("amazon_br", "www.amazon.com.br"),
+        "pichau_br": ("pichau", "www.pichau.com.br"),
+    }
+    if parser is not None and permitted_parsers.get(parser) != (store_id, base_host):
         raise AddonValidationError("Unsupported or mismatched addon parser")
     for section in ("price", "product_name"):
         _strategies(addon.get(section), section, SUPPORTED_TYPES)

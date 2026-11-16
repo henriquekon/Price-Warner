@@ -175,6 +175,8 @@ def check_product(product_id: int, notifier: Notifier):
             db.commit()
             if result.get("status"):
                 failure_code = result["status"]
+            elif type(exc).__name__ == "BrowserFetchError":
+                failure_code = str(exc).split(":", 1)[0][:80]
             elif isinstance(exc, httpx.TimeoutException):
                 failure_code = "timeout"
             elif isinstance(exc, httpx.HTTPStatusError):

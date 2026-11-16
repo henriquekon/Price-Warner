@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 from engine.addons.registry import load_addon
 from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
+from engine.addons.pichau_parser import parse_brl_price, parse_pichau_product
 from engine.media import validate_product_image_url
 from urllib.parse import urlparse
 from threading import Lock
@@ -15,6 +16,9 @@ def transform_value(raw, transform: str):
     """Converts raw extracted value to a desired format"""
     if transform is None or raw is None:
         return raw
+
+    if transform == "mixed_locale_brl":
+        return parse_brl_price(raw)
 
     if transform == "float":
         if isinstance(raw, (int, float)):
@@ -143,6 +147,19 @@ def run_strategies(soup: BeautifulSoup, strategies: list):
 # Keep only a small number of recent, public search-result snapshots in memory.
 _SEARCH_SNAPSHOTS = {}
 _SEARCH_SNAPSHOTS_LOCK = Lock()
+_BROWSER_PACING_LOCK = Lock()
+_BROWSER_LAST_REQUEST = {}
+
+
+def _pace_browser_host(host: str, minimum_seconds: float):
+    """Apply process-wide pacing across browser-backed Pichau product checks."""
+    with _BROWSER_PACING_LOCK:
+        previous = _BROWSER_LAST_REQUEST.get(host)
+        if previous is not None:
+            delay = minimum_seconds - (time.monotonic() - previous)
+            if delay > 0:
+                time.sleep(delay)
+        _BROWSER_LAST_REQUEST[host] = time.monotonic()
 
 
 class AddonScraper:
@@ -150,6 +167,7 @@ class AddonScraper:
         self.addon = load_addon(addon_path)
         self.client = httpx.Client(http2=True, trust_env=False)
         self._last_request_at = None
+        self._browser_fetcher = None
 
     def __enter__(self):
         return self
@@ -158,6 +176,9 @@ class AddonScraper:
         self.close()
 
     def close(self):
+        if self._browser_fetcher is not None:
+            self._browser_fetcher.close()
+            self._browser_fetcher = None
         self.client.close()
 
     def _make_request(self, url: str, *, rate_limit_seconds: float | None = None) -> httpx.Response:
@@ -174,6 +195,14 @@ class AddonScraper:
             remaining = limit - (time.monotonic() - self._last_request_at)
             if remaining > 0:
                 time.sleep(remaining)
+
+        if cfg.get("transport") == "playwright_firefox":
+            from engine.browser_fetch import FirefoxHTMLFetcher
+            _pace_browser_host(base.hostname, limit)
+            if self._browser_fetcher is None:
+                self._browser_fetcher = FirefoxHTMLFetcher(base.hostname, float(cfg.get("timeout", 30)))
+            self._last_request_at = time.monotonic()
+            return self._browser_fetcher.fetch(url, search=requested.path == "/search")
 
         headers = {
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -234,6 +263,12 @@ class AddonScraper:
                 "strategies_used": {"price": parsed.price_source},
                 "variants": list(parsed.variants),
             }
+        if self.addon.get("parser") == "pichau_br":
+            parsed = parse_pichau_product(html, url)
+            parsed["store"] = self.addon["store"]["id"]
+            parsed["store_name"] = self.addon["store"]["name"]
+            parsed["image_url"] = validate_product_image_url(parsed["image_url"], self.addon)
+            return parsed
         soup = BeautifulSoup(html, "html.parser")
 
         result = {
@@ -408,15 +443,22 @@ class AddonScraper:
             if not name:
                 continue
             product_url = value if value.startswith("https://") else mapping.get("url_prefix", "") + value
+            if self.addon["store"]["id"] == "pichau":
+                target = urlparse(product_url)
+                if target.scheme != "https" or target.hostname != "www.pichau.com.br" or not target.path.strip("/"):
+                    continue
             image = card.select_one(mapping["image_selector"])
             raw_image = image.get(mapping.get("image_source", "src")) if image else None
             image_url = validate_product_image_url(raw_image, self.addon)
             price_node = card.select_one(mapping["price_selector"])
             price = None
-            if price_node is not None:
+            is_out_of_stock = (mapping.get("out_of_stock_text", "").lower() in card.get_text(" ", strip=True).lower()
+                               if mapping.get("out_of_stock_text") else False)
+            if price_node is not None and not is_out_of_stock:
                 try:
-                    candidate = transform_value(price_node.get_text(" ", strip=True), "comma_decimal_to_float")
-                    if candidate > 0:
+                    candidate = transform_value(price_node.get_text(" ", strip=True),
+                                                mapping.get("price_transform", "comma_decimal_to_float"))
+                    if isinstance(candidate, (int, float)) and candidate > 0:
                         price = candidate
                 except (ValueError, TypeError, AttributeError):
                     pass
@@ -462,7 +504,7 @@ class AddonScraper:
                 soup = BeautifulSoup(response.text, "html.parser")
                 if (soup.select_one('form[action*="validateCaptcha"]')
                         or "robot check" in (soup.title.get_text(" ", strip=True).lower() if soup.title else "")):
-                    raise ValueError("Amazon requires manual verification; search was not parsed")
+                    raise ValueError("Store requires manual verification; search was not parsed")
                 raw_items = []
                 for strategy in search_cfg["strategies"]:
                     if strategy["type"] == "html_cards":

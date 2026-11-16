@@ -6,6 +6,8 @@ services:
     ports:
       - "${PRICE_WARNER_BIND:-127.0.0.1}:${PRICE_WARNER_PORT:-9873}:9873"
     environment: &common_environment
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp
       DATABASE_URL: sqlite:////app/storage/database.db
       ADDONS_DIR: /app/addons
       NOTIFICATION_LOG_PATH: /app/storage/notifications.log

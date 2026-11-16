@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
                 logger.info("Price scheduler stopped")
 
 
-app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.5", lifespan=lifespan)
+app = FastAPI(title="Price-Warner Server", version="1.0.0-beta.7", lifespan=lifespan)
 
 
 @app.middleware("http")

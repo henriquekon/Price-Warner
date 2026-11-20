@@ -6,6 +6,7 @@ from pathlib import Path
 from engine.addons.registry import load_addon
 from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
 from engine.addons.pichau_parser import parse_brl_price, parse_pichau_product
+from engine.addons.terabyteshop_parser import parse_terabyteshop_product
 from engine.media import validate_product_image_url
 from urllib.parse import urlparse
 from threading import Lock
@@ -265,6 +266,12 @@ class AddonScraper:
             }
         if self.addon.get("parser") == "pichau_br":
             parsed = parse_pichau_product(html, url)
+            parsed["store"] = self.addon["store"]["id"]
+            parsed["store_name"] = self.addon["store"]["name"]
+            parsed["image_url"] = validate_product_image_url(parsed["image_url"], self.addon)
+            return parsed
+        if self.addon.get("parser") == "terabyteshop_br":
+            parsed = parse_terabyteshop_product(html, url)
             parsed["store"] = self.addon["store"]["id"]
             parsed["store_name"] = self.addon["store"]["name"]
             parsed["image_url"] = validate_product_image_url(parsed["image_url"], self.addon)

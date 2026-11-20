@@ -90,8 +90,10 @@ def validate_addon(addon):
     transport = request.get("transport", "httpx")
     if transport not in ("httpx", "playwright_firefox"):
         raise AddonValidationError("Unsupported request.transport")
-    if transport == "playwright_firefox" and (store_id, base_host) != ("pichau", "www.pichau.com.br"):
-        raise AddonValidationError("Firefox transport is currently limited to Pichau")
+    firefox_stores = {("pichau", "www.pichau.com.br"),
+                      ("terabyteshop", "www.terabyteshop.com.br")}
+    if transport == "playwright_firefox" and (store_id, base_host) not in firefox_stores:
+        raise AddonValidationError("Firefox transport is currently limited to Pichau and TerabyteShop")
     if not isinstance(request.get("headers", {}), dict):
         raise AddonValidationError("request.headers must be an object")
     for field, minimum in (("timeout", 0.1), ("rate_limit_seconds", 0)):
@@ -105,6 +107,7 @@ def validate_addon(addon):
     permitted_parsers = {
         "amazon_br": ("amazon_br", "www.amazon.com.br"),
         "pichau_br": ("pichau", "www.pichau.com.br"),
+        "terabyteshop_br": ("terabyteshop", "www.terabyteshop.com.br"),
     }
     if parser is not None and permitted_parsers.get(parser) != (store_id, base_host):
         raise AddonValidationError("Unsupported or mismatched addon parser")

@@ -1,0 +1,37 @@
+{
+  "_comment": "TerabyteShop Brazil. Monitors product URLs only. Uses the displayed Pix/boleto cash price, not installments or crossed-out prices.",
+  "store": {
+    "id": "terabyteshop",
+    "name": "TerabyteShop",
+    "base_url": "https://www.terabyteshop.com.br",
+    "currency": "BRL",
+    "image_hosts": ["img.terabyteshop.com.br"]
+  },
+  "parser": "terabyteshop_br",
+  "request": {
+    "method": "GET",
+    "timeout": 30,
+    "rate_limit_seconds": 10,
+    "transport": "playwright_firefox"
+  },
+  "price": {
+    "strategies": [
+      {"name": "cash_price", "type": "css", "selector": "p.val-prod.valVista"}
+    ]
+  },
+  "product_name": {
+    "strategies": [
+      {"name": "product_title", "type": "css", "selector": "h1"}
+    ]
+  },
+  "availability": {
+    "strategies": [
+      {"name": "cash_offer_present", "type": "css_exists", "selector": "p.val-prod.valVista"}
+    ]
+  },
+  "product_image": {
+    "strategies": [
+      {"name": "product_og_image", "type": "meta", "attribute": "property", "value": "og:image", "extract": "content"}
+    ]
+  }
+}

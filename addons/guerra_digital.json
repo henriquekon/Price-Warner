@@ -1,0 +1,77 @@
+{
+  "_comment": "Guerra Digital Brazil. Parses the displayed Pix/boleto price and primary product stock. Search uses public search form, first results page only.",
+  "store": {
+    "id": "guerra_digital",
+    "name": "Guerra Digital",
+    "base_url": "https://www.guerradigital.com.br",
+    "currency": "BRL",
+    "image_hosts": [
+      "acdn-us.mitiendanube.com"
+    ]
+  },
+  "parser": "guerra_digital_br",
+  "request": {
+    "method": "GET",
+    "timeout": 25,
+    "rate_limit_seconds": 5
+  },
+  "price": {
+    "strategies": [
+      {
+        "name": "cash_price",
+        "type": "css",
+        "selector": "#single-product #price_display"
+      }
+    ]
+  },
+  "product_name": {
+    "strategies": [
+      {
+        "name": "primary_name",
+        "type": "css",
+        "selector": "#single-product h1.js-product-name"
+      }
+    ]
+  },
+  "availability": {
+    "strategies": [
+      {
+        "name": "buy_button",
+        "type": "css_exists",
+        "selector": "#single-product input[data-store=\"product-buy-button\"]:not([disabled])"
+      }
+    ]
+  },
+  "product_image": {
+    "strategies": [
+      {
+        "name": "og_image",
+        "type": "meta",
+        "attribute": "property",
+        "value": "og:image",
+        "extract": "content"
+      }
+    ]
+  },
+  "search": {
+    "url_template": "https://www.guerradigital.com.br/search/?q={query}",
+    "strategies": [
+      {
+        "name": "product_cards",
+        "type": "html_cards",
+        "card_selector": ".js-item-product[data-product-id]",
+        "mapping": {
+          "url_selector": "a.item-link[href]",
+          "url_source": "href",
+          "name_selector": ".js-item-name",
+          "price_selector": ".preco-produto",
+          "price_transform": "mixed_locale_brl",
+          "image_selector": "img.js-item-image[data-srcset]",
+          "image_source": "data-srcset",
+          "image_srcset": true,
+          "stock_variants_selector": ".js-product-container[data-variants]"
+        }
+      }
+    ]
+  }
+}

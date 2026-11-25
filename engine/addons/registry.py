@@ -108,6 +108,7 @@ def validate_addon(addon):
         "amazon_br": ("amazon_br", "www.amazon.com.br"),
         "pichau_br": ("pichau", "www.pichau.com.br"),
         "terabyteshop_br": ("terabyteshop", "www.terabyteshop.com.br"),
+        "guerra_digital_br": ("guerra_digital", "www.guerradigital.com.br"),
     }
     if parser is not None and permitted_parsers.get(parser) != (store_id, base_host):
         raise AddonValidationError("Unsupported or mismatched addon parser")

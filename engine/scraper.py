@@ -7,6 +7,7 @@ from engine.addons.registry import load_addon
 from engine.addons.amazon_parser import parse_amazon_product, normalize_amazon_url
 from engine.addons.pichau_parser import parse_brl_price, parse_pichau_product
 from engine.addons.terabyteshop_parser import parse_terabyteshop_product
+from engine.addons.guerra_digital_parser import parse_guerra_digital_product
 from engine.media import validate_product_image_url
 from urllib.parse import urlparse
 from threading import Lock
@@ -276,6 +277,12 @@ class AddonScraper:
             parsed["store_name"] = self.addon["store"]["name"]
             parsed["image_url"] = validate_product_image_url(parsed["image_url"], self.addon)
             return parsed
+        if self.addon.get("parser") == "guerra_digital_br":
+            parsed = parse_guerra_digital_product(html, url)
+            parsed["store"] = self.addon["store"]["id"]
+            parsed["store_name"] = self.addon["store"]["name"]
+            parsed["image_url"] = validate_product_image_url(parsed["image_url"], self.addon)
+            return parsed
         soup = BeautifulSoup(html, "html.parser")
 
         result = {
@@ -438,7 +445,9 @@ class AddonScraper:
         mapping = strategy["mapping"]
         found = []
         for card in soup.select(strategy["card_selector"]):
-            value = card.get(mapping["url_source"], "")
+            link = (card.select_one(mapping["url_selector"])
+                    if mapping.get("url_selector") else card)
+            value = link.get(mapping["url_source"], "") if link else ""
             if not isinstance(value, str) or not value:
                 continue
             if mapping.get("asin_pattern") and not re.fullmatch(mapping["asin_pattern"], value):
@@ -450,17 +459,35 @@ class AddonScraper:
             if not name:
                 continue
             product_url = value if value.startswith("https://") else mapping.get("url_prefix", "") + value
-            if self.addon["store"]["id"] == "pichau":
+            if self.addon["store"]["id"] in ("pichau", "guerra_digital"):
                 target = urlparse(product_url)
-                if target.scheme != "https" or target.hostname != "www.pichau.com.br" or not target.path.strip("/"):
+                base = urlparse(self.addon["store"]["base_url"])
+                if (target.scheme != "https" or target.hostname != base.hostname
+                        or not target.path.strip("/") or target.username
+                        or target.password or target.port is not None):
                     continue
             image = card.select_one(mapping["image_selector"])
             raw_image = image.get(mapping.get("image_source", "src")) if image else None
+            if raw_image and mapping.get("image_srcset"):
+                raw_image = raw_image.split(",", 1)[0].strip().split(" ", 1)[0]
+            if raw_image and raw_image.startswith("//"):
+                raw_image = "https:" + raw_image
             image_url = validate_product_image_url(raw_image, self.addon)
             price_node = card.select_one(mapping["price_selector"])
             price = None
             is_out_of_stock = (mapping.get("out_of_stock_text", "").lower() in card.get_text(" ", strip=True).lower()
                                if mapping.get("out_of_stock_text") else False)
+            if mapping.get("stock_variants_selector"):
+                variants_node = card.select_one(mapping["stock_variants_selector"])
+                try:
+                    variants = json.loads(variants_node["data-variants"]) if variants_node else []
+                except (KeyError, TypeError, ValueError):
+                    variants = []
+                is_out_of_stock = not (isinstance(variants, list) and variants and any(
+                    isinstance(variant, dict) and variant.get("available") is True
+                    and (not isinstance(variant.get("stock"), int) or variant["stock"] > 0)
+                    for variant in variants
+                ))
             if price_node is not None and not is_out_of_stock:
                 try:
                     candidate = transform_value(price_node.get_text(" ", strip=True),

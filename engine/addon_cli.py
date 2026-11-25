@@ -48,6 +48,13 @@ def inspect_html(addon, html, url):
         parsed["store"] = addon["store"]["id"]
         parsed["image_url"] = validate_product_image_url(parsed.get("image_url"), addon)
         return parsed
+    if addon.get("parser") == "guerra_digital_br":
+        from engine.addons.guerra_digital_parser import parse_guerra_digital_product
+        from engine.media import validate_product_image_url
+        parsed = parse_guerra_digital_product(html, url)
+        parsed["store"] = addon["store"]["id"]
+        parsed["image_url"] = validate_product_image_url(parsed.get("image_url"), addon)
+        return parsed
     soup = BeautifulSoup(html, "html.parser")
     result = {
         "ok": False,
